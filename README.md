@@ -18,7 +18,16 @@ A comprehensive toolchain for processing legal documents from RTF to HTML with i
 
 4. **Image Processing**
    - Converts EMF images to PNG format using convert_emf_images.py
+   - Requires LibreOffice for image conversion
    - Ensures proper display of images in HTML output
+
+## Prerequisites
+
+- Python 3.6 or higher
+- LibreOffice (for image conversion)
+  - macOS: `brew install --cask libreoffice`
+  - Windows: Download from [LibreOffice website](https://www.libreoffice.org/download/download/)
+  - Linux: `sudo apt-get install libreoffice` or equivalent for your distribution
 
 ## Components
 
@@ -29,14 +38,20 @@ A comprehensive toolchain for processing legal documents from RTF to HTML with i
 
 ## Requirements
 
-- Python 3.x
 - python-docx
 - mammoth
+- beautifulsoup4
+- lxml
+- requests
 - Additional dependencies listed in requirements.txt
 
 ## Installation
 
 ```bash
+# Install LibreOffice (required for image conversion)
+# macOS:
+brew install --cask libreoffice
+
 # Create and activate virtual environment
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
@@ -71,5 +86,5 @@ The toolchain generates:
 ## Notes
 
 - The RTF to DOCX conversion step requires Microsoft Word
-- Image conversion requires proper EMF to PNG conversion tools
+- Image conversion requires LibreOffice to be installed and accessible from PATH
 - The toolchain is optimized for legal document processing 

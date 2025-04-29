@@ -2,6 +2,13 @@ import json
 from bs4 import BeautifulSoup, NavigableString
 import re
 
+def normalize_hyphens(text):
+    """Replaces various Unicode dashes/hyphens with standard hyphen-minus."""
+    if not text:
+        return text
+    # Replace various dashes (U+2010 to U+2015) and standard hyphen with hyphen-minus
+    return re.sub(r'[\u2010-\u2015\-]+', '-', text)
+
 def clean_html_for_embedding(html_string):
     """Removes images and extracts clean text from an HTML string."""
     if not html_string:
@@ -38,10 +45,13 @@ def extract_html_sections(html_filepath):
     soup = BeautifulSoup(html_content, 'html.parser')
     sections_dict = {}
 
-    separator_pattern = r"[\s\u2010-\u2015\-]" # Handles various dashes
+    # Define pattern to match various hyphens/dashes
+    separator_pattern = r"[\s\u2010-\u2015\-]"
+    # Define pattern to specifically match the *standard* hyphen for splitting
+    standard_hyphen = "-"
 
     patterns = {
-        # Using refined patterns
+        # Using refined patterns - ensure capture groups grab the core ID part
         'Chapter': re.compile(rf"^\s*Chapter\s+(\d{{1,3}}[A-Z]?){separator_pattern}+(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         'Part': re.compile(rf"^\s*Part\s+(\d{{1,3}}[A-Z]?-\d{{1,3}}[A-Z]?){separator_pattern}+(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         'Division': re.compile(rf"^\s*Division\s+(\d{{1,3}}[A-Z]?){separator_pattern}+(.*?)(?:\s+\d+)?$", re.IGNORECASE),
@@ -50,7 +60,7 @@ def extract_html_sections(html_filepath):
         'Section': re.compile(rf"^\s*(?:<strong>)?(\d{{1,3}}[A-Z]?{separator_pattern}\d{{1,3}}[A-Z]?)(?:</strong>)?\s+(.*?)(?:\s+\d+)?$", re.IGNORECASE)
     }
     
-    current_section_key = None
+    current_key_normalized = None # Use normalized key for dict
     current_html_snippet_tags = []
     found_first_section = False # Preamble skip flag
 
@@ -84,34 +94,58 @@ def extract_html_sections(html_filepath):
 
         if matched_level:
             # If we were already collecting tags, save the previous section
-            if current_section_key and current_html_snippet_tags:
-                html_string = "\\n".join(current_html_snippet_tags)
+            if current_key_normalized and current_html_snippet_tags:
+                html_string = "\n".join(current_html_snippet_tags)
                 text_for_embedding = clean_html_for_embedding(html_string)
-                sections_dict[current_section_key] = {
-                    "html": html_string,
-                    "char_count": len(text_for_embedding),
-                    "text_for_embedding": text_for_embedding
-                }
+                # Previous section data (structure_type, etc.) should have been prepared when it started
+                # We just finalize the html and text fields here
+                sections_dict[current_key_normalized]["html"] = html_string
+                sections_dict[current_key_normalized]["char_count"] = len(text_for_embedding)
+                sections_dict[current_key_normalized]["text_for_embedding"] = text_for_embedding
             
             # Determine the new key based on the matched level
-            new_key = None
+            raw_identifier = None
+            new_key_normalized = None
+            section_info = {"structure_type": matched_level}
+            
             if matched_level == 'Guide':
                 guide_type = match_obj.group(1)
                 guide_id = match_obj.group(2)
-                new_key = f"Guide to {guide_type} {guide_id}"
+                # Key for dict might include type for uniqueness
+                raw_key = f"Guide to {guide_type} {guide_id}"
+                new_key_normalized = normalize_hyphens(raw_key)
+                # Store the guide ID for parsing
+                raw_identifier = guide_id
+                section_info["guide_target_type"] = guide_type # Store what it's a guide to
             elif matched_level == 'Section':
                 identifier = match_obj.group(1)
-                new_key = identifier # Use only the number as the key for Sections
+                raw_identifier = identifier
+                new_key_normalized = normalize_hyphens(raw_identifier)
             else: # Chapter, Part, Division, Subdivision
-                identifier = match_obj.group(1)
-                new_key = f"{matched_level} {identifier}"
+                raw_identifier = match_obj.group(1) # Assign directly, removed intermediate 'identifier'
+                # Use normalized ID as key for these types
+                new_key_normalized = normalize_hyphens(raw_identifier)
+
+            # --- Parse the identifier --- 
+            if raw_identifier:
+                normalized_identifier = normalize_hyphens(raw_identifier)
+                section_info["full_id"] = normalized_identifier # Store the full ID
+                
+                id_parts = normalized_identifier.split(standard_hyphen)
+                if len(id_parts) > 0:
+                    section_info["primary_id"] = id_parts[0]
+                if len(id_parts) > 1:
+                    section_info["secondary_id"] = id_parts[1]
+                # Add more parts if needed for complex IDs like X-Y-Z
 
             # Start collecting for the new section
-            current_section_key = new_key
+            current_key_normalized = new_key_normalized
+            # Initialize the dict entry with structure info
+            sections_dict[current_key_normalized] = section_info 
             current_html_snippet_tags = [str(tag)] # Start with the tag that matched
             found_first_section = True # We are now past the preamble
         
-        elif current_section_key and found_first_section:
+        elif current_key_normalized and found_first_section:
             # If we are collecting a section (past preamble) and this tag didn't start a new one,
             # append it to the current section's snippet.
             # Include empty tags if they are part of the content.
@@ -119,14 +153,13 @@ def extract_html_sections(html_filepath):
         # else: Do nothing - ignore tags before the first marker (preamble)
 
     # Add the last collected section after the loop finishes
-    if current_section_key and current_html_snippet_tags:
-        html_string = "\\n".join(current_html_snippet_tags)
+    if current_key_normalized and current_html_snippet_tags:
+        html_string = "\n".join(current_html_snippet_tags)
         text_for_embedding = clean_html_for_embedding(html_string)
-        sections_dict[current_section_key] = {
-            "html": html_string,
-            "char_count": len(text_for_embedding),
-            "text_for_embedding": text_for_embedding
-        }
+        # Finalize the last section's data
+        sections_dict[current_key_normalized]["html"] = html_string
+        sections_dict[current_key_normalized]["char_count"] = len(text_for_embedding)
+        sections_dict[current_key_normalized]["text_for_embedding"] = text_for_embedding
 
     print(f"Identified {len(sections_dict)} sections/markers.") 
     return sections_dict

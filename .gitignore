@@ -24,6 +24,7 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # IDE
 .idea/
@@ -33,4 +34,14 @@ ENV/
 
 # OS
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Project specific
+*.rtf
+*.docx
+*.fld/
+*.html
+*.json
+*.xml
+*.wmf
+*.emf 
