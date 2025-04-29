@@ -1,0 +1,9 @@
+streamlit
+fastapi
+uvicorn
+requests
+supabase
+sentence-transformers
+python-dotenv
+torch # Or tensorflow/flax depending on your backend preference
+beautifulsoup4
