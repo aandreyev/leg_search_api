@@ -18,7 +18,10 @@ check_python() {
 
     # Check Python version
     PYTHON_VERSION=$($PYTHON_CMD -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-    if [[ $(echo "$PYTHON_VERSION < 3.6" | bc -l) -eq 1 ]]; then
+    REQUIRED_VERSION="3.6"
+    
+    # Compare versions using Python itself
+    if ! $PYTHON_CMD -c "import sys; exit(0 if sys.version_info >= (3, 6) else 1)"; then
         echo "Python 3.6 or higher is required. Found version $PYTHON_VERSION"
         exit 1
     fi
