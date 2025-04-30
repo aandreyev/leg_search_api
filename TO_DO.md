@@ -4,5 +4,3 @@ Insert dynamic links.
 Host on remote server.
 Track/log search terms used by people.
 Track overall useage.
-Logging of errors during operation.
-Create a process script to ingest legislation.
