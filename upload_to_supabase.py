@@ -39,11 +39,13 @@ def load_json_data(filepath):
         print(f"An unexpected error occurred while loading {filepath}: {e}")
         return None
 
-def main(source_json_filepath):
+def main(source_json_filepath, act_name, compilation_date):
     print("--- Starting Supabase Upload ---") # Start marker
     # Get the current timestamp for this run
     run_timestamp_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    print(f"Processing run timestamp: {run_timestamp_iso}")
+    print(f"Processing Act: {act_name}")
+    print(f"Compilation Date: {compilation_date}")
+    print(f"Upload Timestamp (UTC): {run_timestamp_iso}")
 
     # Load the data with embeddings
     sections_data = load_json_data(source_json_filepath)
@@ -77,7 +79,9 @@ def main(source_json_filepath):
             'char_count': data.get('char_count'),
             'heading_text': data.get('heading_text'),
             'embedding': data.get('embedding'), # Ensure this key exists and contains the list of floats
-            'last_updated': run_timestamp_iso # Add the timestamp for this run
+            'last_updated': run_timestamp_iso, # Add the timestamp for this run
+            'act_name': act_name, # Add the act name passed as argument
+            'act_compilation_dt': compilation_date # Add the compilation date passed as argument
         }
         # Add only if embedding exists to avoid errors
         if record['embedding'] and record['section_key']: # Also check key exists
@@ -134,12 +138,16 @@ def main(source_json_filepath):
     print("--- Finished Supabase Upload (successfully) ---") # End marker
 
 if __name__ == "__main__":
-    # Expect one argument: input JSON path
-    if len(sys.argv) != 2:
-        print(f"Usage: python {os.path.basename(sys.argv[0])} <input_json_file>")
+    # Expect three arguments: input JSON path, act name, compilation date
+    if len(sys.argv) != 4:
+        print(f"Usage: python {os.path.basename(sys.argv[0])} <input_json_file> <act_name> <compilation_date_YYYY-MM-DD>")
         sys.exit(1)
 
     input_json_path = sys.argv[1]
+    act_name_arg = sys.argv[2]
+    compilation_date_arg = sys.argv[3]
+
+    # Optional: Add validation for date format if needed here as well
 
     # Ensure input file exists
     if not os.path.exists(input_json_path):
@@ -149,4 +157,4 @@ if __name__ == "__main__":
     # Create a .env file in the same directory with:
     # SUPABASE_URL=your_supabase_project_url
     # SUPABASE_KEY=your_supabase_anon_or_service_key
-    main(input_json_path)
+    main(input_json_path, act_name_arg, compilation_date_arg)

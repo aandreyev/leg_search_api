@@ -4,31 +4,83 @@ import json
 import os
 import sys
 import subprocess
+import datetime # Keep for potential future use, though timestamp now in upload script
+from dotenv import load_dotenv # Needed for deletion step
+from supabase import create_client, Client # Needed for deletion step
 
 def read_config(config_path):
     """Reads the configuration file (JSON format).
 
+    Expects config structure:
+    {
+      "keep_intermediates": boolean (optional, defaults to True),
+      "docx_files": [
+        {
+          "path": "path/to/file.docx",
+          "act_name": "Name of the Act",
+          "compilation_date": "YYYY-MM-DD"
+        },
+        ...
+      ]
+    }
+
     Returns:
-        tuple: (list of docx file paths, boolean keep_intermediates setting)
+        tuple: (list of docx file info dicts, boolean keep_intermediates setting)
     """
-    keep_intermediates_default = True # Default to True during development
+    keep_intermediates_default = True
+    config_data = []
+    keep_intermediates = keep_intermediates_default
+
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = json.load(f)
-        if "docx_files" not in config or not isinstance(config["docx_files"], list):
-            print(f"Error: Config file '{config_path}' must contain a 'docx_files' list.", file=sys.stderr)
-            sys.exit(1)
 
-        # Get keep_intermediates setting, default to True if missing or invalid type
+        # Get keep_intermediates setting
         keep_intermediates = config.get("keep_intermediates", keep_intermediates_default)
         if not isinstance(keep_intermediates, bool):
             print(f"Warning: 'keep_intermediates' setting in '{config_path}' is not a boolean. Defaulting to {keep_intermediates_default}.", file=sys.stderr)
             keep_intermediates = keep_intermediates_default
 
-        # Resolve paths relative to the config file's directory
+        # Validate and process docx_files list
+        if "docx_files" not in config or not isinstance(config["docx_files"], list):
+            print(f"Error: Config file '{config_path}' must contain a 'docx_files' list.", file=sys.stderr)
+            return None, keep_intermediates # Return None for data to indicate error
+
         config_dir = os.path.dirname(os.path.abspath(config_path))
-        resolved_paths = [os.path.abspath(os.path.join(config_dir, p)) for p in config["docx_files"]]
-        return resolved_paths, keep_intermediates
+        for item in config["docx_files"]:
+            if not isinstance(item, dict):
+                print(f"Error: Entry in 'docx_files' is not a dictionary: {item}", file=sys.stderr)
+                return None, keep_intermediates
+            
+            required_keys = ["path", "act_name", "compilation_date"]
+            if not all(key in item for key in required_keys):
+                print(f"Error: Entry in 'docx_files' is missing required keys ({required_keys}): {item}", file=sys.stderr)
+                return None, keep_intermediates
+
+            # Basic validation (can be expanded)
+            if not isinstance(item["path"], str) or not item["path"].lower().endswith(".docx"):
+                print(f"Error: Invalid 'path' in docx_files entry: {item['path']}", file=sys.stderr)
+                return None, keep_intermediates
+            if not isinstance(item["act_name"], str) or not item["act_name"].strip():
+                 print(f"Error: Invalid 'act_name' in docx_files entry: {item['act_name']}", file=sys.stderr)
+                 return None, keep_intermediates
+            # Basic date format check (YYYY-MM-DD)
+            try:
+                 datetime.datetime.strptime(item["compilation_date"], '%Y-%m-%d')
+            except ValueError:
+                 print(f"Error: Invalid 'compilation_date' format (use YYYY-MM-DD): {item['compilation_date']}", file=sys.stderr)
+                 return None, keep_intermediates
+
+            # Resolve path relative to config file
+            resolved_path = os.path.abspath(os.path.join(config_dir, item['path']))
+            config_data.append({
+                "path": resolved_path,
+                "act_name": item["act_name"].strip(),
+                "compilation_date": item["compilation_date"]
+            })
+
+        return config_data, keep_intermediates
+
     except FileNotFoundError:
         print(f"Error: Config file not found at '{config_path}'", file=sys.stderr)
         sys.exit(1)
@@ -39,9 +91,58 @@ def read_config(config_path):
         print(f"Error reading config file '{config_path}': {e}", file=sys.stderr)
         sys.exit(1)
 
-def process_single_file(docx_path, save_intermediates=True):
+def delete_act_data_from_supabase(act_names_to_delete):
+    """Connects to Supabase and deletes existing data for the specified Act names."""
+    print("\n--- Attempting to delete existing Supabase data --- ")
+    if not act_names_to_delete:
+        print("No act names specified for deletion. Skipping.")
+        return True
+
+    load_dotenv() # Load .env file for credentials
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_KEY")
+
+    if not supabase_url or not supabase_key:
+        print("Error: SUPABASE_URL and SUPABASE_KEY must be set in environment variables or .env file for deletion step.", file=sys.stderr)
+        return False
+
+    try:
+        print(f"Initializing Supabase client for deletion...")
+        supabase: Client = create_client(supabase_url, supabase_key)
+        print("Supabase client initialized.")
+        
+        table_name = 'sections' # Hardcoded table name, consistent with upload script
+        all_success = True
+
+        for act_name in act_names_to_delete:
+            print(f"Deleting data for Act: '{act_name}' from table '{table_name}'...")
+            try:
+                # Execute the delete operation
+                response = supabase.table(table_name).delete().eq('act_name', act_name).execute()
+                # Basic check: Supabase API v1+ might not have a detailed count in the response
+                # We assume success if no exception is raised. Check docs if specific counts are needed.
+                print(f"  Deletion command executed for '{act_name}'.")
+                # Optional: Add more robust response checking if API provides it
+                # if hasattr(response, 'error') and response.error:
+                #    print(f"  Error deleting data for '{act_name}': {response.error}", file=sys.stderr)
+                #    all_success = False
+            except Exception as delete_error:
+                print(f"  Error during Supabase delete operation for '{act_name}': {delete_error}", file=sys.stderr)
+                all_success = False
+        
+        print("--- Finished Supabase deletion step ---")
+        return all_success
+
+    except Exception as e:
+        print(f"Error connecting to or interacting with Supabase during deletion: {e}", file=sys.stderr)
+        print("--- Finished Supabase deletion step (with error) ---")
+        return False
+
+def process_single_file(docx_path, act_name, compilation_date, save_intermediates=True):
     """Processes a single DOCX file through the pipeline."""
-    print(f"Starting processing for: {docx_path}")
+    print(f"\nStarting processing for: {docx_path}")
+    print(f"  Act Name: {act_name}")
+    print(f"  Compilation Date: {compilation_date}")
     base_path_no_ext, _ = os.path.splitext(docx_path)
     output_dir = os.path.dirname(docx_path) or '.'
     file_basename = os.path.basename(base_path_no_ext)
@@ -330,7 +431,8 @@ def process_single_file(docx_path, save_intermediates=True):
                  # Don't automatically clean up final file on upload script missing
                  return False # Indicate failure
 
-        cmd = [sys.executable, script_path, current_step_input]
+        # Pass json path, act name, and compilation date to the upload script
+        cmd = [sys.executable, script_path, current_step_input, act_name, compilation_date]
         print(f"    Running command: {' '.join(cmd)}")
         # NOTE: We assume the upload script handles its own Supabase errors internally
         # and exits non-zero if it fails critically.
@@ -375,17 +477,43 @@ def main():
     parser.add_argument("config_file", help="Path to the configuration file (JSON).")
     args = parser.parse_args()
 
-    docx_files, keep_intermediates = read_config(args.config_file)
+    config_data, keep_intermediates = read_config(args.config_file)
 
-    if not docx_files:
+    if config_data is None:
+        print("Exiting due to configuration errors.")
+        sys.exit(1)
+        
+    if not config_data:
         print("No DOCX files specified in the configuration file.")
         return
 
-    print(f"Processing {len(docx_files)} files (Keep intermediates: {keep_intermediates})")
+    # --- Pre-Deletion Step --- 
+    # Get unique act names from the config data
+    unique_act_names = sorted(list(set(item['act_name'] for item in config_data)))
+    if not unique_act_names:
+         print("Warning: Could not extract any act names from config. Cannot perform pre-deletion.")
+         # Decide if we should exit or continue without deleting?
+         # For now, let's continue, but this indicates a config issue.
+    else:
+         print(f"Acts found in config for processing (will attempt pre-delete): {unique_act_names}")
+         delete_success = delete_act_data_from_supabase(unique_act_names)
+         if not delete_success:
+             print("Exiting because Supabase pre-deletion step failed.", file=sys.stderr)
+             sys.exit(1)
+         else:
+              print("Supabase pre-deletion completed successfully.")
+    # --- End Pre-Deletion --- 
+
+    print(f"\nProcessing {len(config_data)} files (Keep intermediates: {keep_intermediates})")
     successful_files = 0
     failed_files = 0
-    for docx_path in docx_files:
-        print(f"\nProcessing: {os.path.basename(docx_path)}")
+    # Loop through the list of file information dictionaries
+    for file_info in config_data:
+        docx_path = file_info['path']
+        act_name = file_info['act_name']
+        compilation_date = file_info['compilation_date']
+
+        print(f"\nProcessing: {os.path.basename(docx_path)} (Act: '{act_name}')")
         if not os.path.exists(docx_path):
             print(f"  Warning: File not found, skipping: {docx_path}", file=sys.stderr)
             failed_files += 1
@@ -395,8 +523,8 @@ def main():
              failed_files += 1
              continue
 
-        # Process the file, passing the setting from the config
-        success = process_single_file(docx_path, save_intermediates=keep_intermediates)
+        # Process the file, passing the setting from the config and act info
+        success = process_single_file(docx_path, act_name, compilation_date, save_intermediates=keep_intermediates)
         if success:
             successful_files += 1
         else:
