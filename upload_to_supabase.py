@@ -109,7 +109,8 @@ def main(source_json_filepath, act_name, compilation_date):
             # Using upsert=True might be safer if you might re-run the script
             # It requires specifying the 'on_conflict' column (your primary key or unique constraint)
             # Example: Assuming 'section_key' is a unique column in your Supabase table
-            response = supabase.table(SUPABASE_TABLE_NAME).upsert(batch, on_conflict='section_key').execute()
+            # Assign to underscore '_' to indicate the variable is intentionally unused
+            _ = supabase.table(SUPABASE_TABLE_NAME).upsert(batch, on_conflict='section_key').execute()
 
             # Simple count check (actual response structure might vary slightly)
             # Note: Supabase Python v1+ response might differ, check library docs if needed.
