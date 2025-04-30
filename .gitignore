@@ -44,4 +44,6 @@ Thumbs.db
 *.json
 *.xml
 *.wmf
-*.emf 
+*.emf
+*.png
+ 
