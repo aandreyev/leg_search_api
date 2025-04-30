@@ -11,10 +11,8 @@ import time
 import re # Added for sanitization
 from PIL import Image # Added for cropping
 
-# --- Configuration ---
-# INPUT_JSON_FILE = 'sections_mammoth_html.json' # No longer needed, taken from argv
-# OUTPUT_JSON_FILE = 'sections_mammoth_display.json' # No longer needed, overwrites input
-OUTPUT_IMAGE_DIR = 'images' # Relative path for converted PNGs
+# --- Configuration (Defaults/Constants) ---
+DEFAULT_OUTPUT_IMAGE_SUBDIR = 'Images' # Subdirectory name for converted PNGs
 # Path to the LibreOffice executable
 CONVERTER_COMMAND = 'libreoffice'
 # Maximum number of retries for failed conversions
@@ -217,37 +215,46 @@ def convert_emf_data_to_png_file(emf_base64_data, output_png_path, section_key_f
 
     return conversion_success
 
-def process_json_images(json_filepath):
+def process_json_images(input_json_filepath, output_json_filepath):
     """
     Loads the input JSON, processes HTML content to convert EMF images
-    to PNG files saved in OUTPUT_IMAGE_DIR, updates the HTML snippets
-    with relative paths to the PNGs, and overwrites the input JSON file.
+    to PNG files saved in a subdirectory relative to the output JSON, 
+    updates the HTML snippets with relative paths to the PNGs, and saves
+    the result to the output JSON file.
     """
-    print(f"Loading data from {json_filepath}...")
+    print("--- Starting EMF Image Conversion ---") # Added start marker
+    print(f"Loading data from {input_json_filepath}...")
     try:
-        with open(json_filepath, 'r', encoding='utf-8') as f:
-            # Use copy.deepcopy if you want to avoid modifying the original dict during iteration
-            # data = json.load(f)
-            # processed_data = copy.deepcopy(data) 
-            # Or load directly if modification during iteration is safe (should be here)
+        with open(input_json_filepath, 'r', encoding='utf-8') as f:
             processed_data = json.load(f)
     except FileNotFoundError:
-        print(f"Error: Input file not found at {json_filepath}", file=sys.stderr)
-        return
+        print(f"Error: Input file not found at {input_json_filepath}", file=sys.stderr)
+        print("--- Finished EMF Image Conversion (with error) ---") # Added end marker (error)
+        return False # Indicate failure
     except json.JSONDecodeError as e:
-        print(f"Error decoding JSON from {json_filepath}: {e}", file=sys.stderr)
-        return
+        print(f"Error decoding JSON from {input_json_filepath}: {e}", file=sys.stderr)
+        print("--- Finished EMF Image Conversion (with error) ---") # Added end marker (error)
+        return False # Indicate failure
     except Exception as e:
-        print(f"Error reading input file {json_filepath}: {e}", file=sys.stderr)
-        return
+        print(f"Error reading input file {input_json_filepath}: {e}", file=sys.stderr)
+        print("--- Finished EMF Image Conversion (with error) ---") # Added end marker (error)
+        return False # Indicate failure
+
+    # Determine the base directory for images (same dir as output JSON)
+    output_base_dir = os.path.dirname(output_json_filepath) or '.'
+    # Define the specific image output directory (e.g., output_base_dir/Images)
+    image_output_dir_abs = os.path.join(output_base_dir, DEFAULT_OUTPUT_IMAGE_SUBDIR)
+    # Relative path for use in HTML src attributes (e.g., "Images")
+    image_output_dir_relative = DEFAULT_OUTPUT_IMAGE_SUBDIR 
 
     # Ensure the output directory for images exists
     try:
-        os.makedirs(OUTPUT_IMAGE_DIR, exist_ok=True)
-        print(f"Ensured image output directory exists: '{OUTPUT_IMAGE_DIR}'")
+        os.makedirs(image_output_dir_abs, exist_ok=True)
+        print(f"Ensured image output directory exists: '{image_output_dir_abs}'")
     except OSError as e:
-        print(f"Error creating output directory '{OUTPUT_IMAGE_DIR}': {e}", file=sys.stderr)
-        return
+        print(f"Error creating output directory '{image_output_dir_abs}': {e}", file=sys.stderr)
+        print("--- Finished EMF Image Conversion (with error) ---") # Added end marker (error)
+        return False # Indicate failure
 
     total_sections = len(processed_data)
     print(f"Found {total_sections} sections to process.")
@@ -285,11 +292,13 @@ def process_json_images(json_filepath):
                     # Generate filename for the PNG
                     safe_section_key = sanitize_filename(section_key)
                     png_filename = f"section_{safe_section_key}_img_{img_index}.png"
-                    output_png_filepath = os.path.join(OUTPUT_IMAGE_DIR, png_filename)
-                    relative_png_path = os.path.join(OUTPUT_IMAGE_DIR, png_filename) # Path for HTML src
+                    # Absolute path for saving the file
+                    output_png_filepath_abs = os.path.join(image_output_dir_abs, png_filename)
+                    # Relative path for HTML src attribute (relative to the JSON file location)
+                    relative_png_path = os.path.join(image_output_dir_relative, png_filename)
 
                     # Convert and save the PNG file
-                    success = convert_emf_data_to_png_file(emf_base64, output_png_filepath, section_key)
+                    success = convert_emf_data_to_png_file(emf_base64, output_png_filepath_abs, section_key)
 
                     if success:
                         # Update the img src tag in the parsed HTML
@@ -317,27 +326,46 @@ def process_json_images(json_filepath):
     if conversion_errors > 0:
         print(f"Total image conversion errors: {conversion_errors}", file=sys.stderr)
 
-    print(f"Saving updated data back to {json_filepath}...")
+    print(f"Saving updated data to {output_json_filepath}...")
     try:
-        with open(json_filepath, 'w', encoding='utf-8') as f:
+        with open(output_json_filepath, 'w', encoding='utf-8') as f:
             json.dump(processed_data, f, indent=4, ensure_ascii=False)
         print("Successfully saved updated data.")
+        print("--- Finished EMF Image Conversion (successfully) ---") # Added end marker (success)
+        return True # Indicate success
     except Exception as e:
-        print(f"Error saving updated data to JSON file {json_filepath}: {e}", file=sys.stderr)
+        print(f"Error saving updated data to JSON file {output_json_filepath}: {e}", file=sys.stderr)
+        print("--- Finished EMF Image Conversion (with error) ---") # Added end marker (error)
+        return False # Indicate failure
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(f"Usage: python {sys.argv[0]} <input_json_file>")
+    # Expect two arguments: input JSON and output JSON
+    if len(sys.argv) != 3:
+        print(f"Usage: python {os.path.basename(sys.argv[0])} <input_json_file> <output_json_file>")
         sys.exit(1)
 
     input_json_path = sys.argv[1]
+    output_json_path = sys.argv[2]
 
     if not os.path.exists(input_json_path):
         print(f"Error: Input JSON file not found at '{input_json_path}'", file=sys.stderr)
         sys.exit(1)
 
+    # Ensure output directory exists before checking dependencies, 
+    # as process_json_images now needs it.
+    output_dir = os.path.dirname(output_json_path) or '.'
+    if output_dir != '.': # Avoid trying to create the current directory if output is local
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as e:
+            print(f"Error: Could not create output directory '{output_dir}': {e}", file=sys.stderr)
+            sys.exit(1)
+
     if check_dependencies():
-        process_json_images(input_json_path)
+        success = process_json_images(input_json_path, output_json_path)
+        if not success:
+             print("Processing failed.", file=sys.stderr)
+             sys.exit(1)
     else:
         sys.exit(1)
         

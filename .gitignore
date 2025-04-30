@@ -38,7 +38,7 @@ Thumbs.db
 
 # Project specific
 *.rtf
-*.docx
+# *.docx
 *.fld/
 *.html
 *.json

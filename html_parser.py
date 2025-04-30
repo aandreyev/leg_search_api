@@ -1,6 +1,8 @@
 import json
 from bs4 import BeautifulSoup, NavigableString
 import re
+import sys # Import sys to access command-line arguments
+import os # Import os for path operations (optional but good practice)
 
 def normalize_hyphens(text):
     """Replaces various Unicode dashes/hyphens with standard hyphen-minus."""
@@ -23,24 +25,21 @@ def clean_html_for_embedding(html_string):
     text = soup.get_text(separator=' ', strip=True)
     return text
 
-def extract_html_sections(html_filepath):
+def extract_html_sections(html_content):
     """
-    Reads an HTML file, parses it, identifies legislative structure markers 
+    Parses HTML content, identifies legislative structure markers 
     (Chapter, Part, Division, Subdivision, Guide, Section), and returns a 
     dictionary mapping structure IDs to a dictionary containing:
     - html: The full HTML chunk (marker tag + subsequent content tags).
     - char_count: Character count of the HTML chunk.
     - text_for_embedding: Cleaned text content with images and tags removed.
     - heading_text: The descriptive heading associated with the marker.
+
+    Args:
+        html_content (str): The HTML string content to parse.
     """
-    try:
-        with open(html_filepath, 'r', encoding='utf-8') as f:
-            html_content = f.read()
-    except FileNotFoundError:
-        print(f"Error: HTML file not found at {html_filepath}")
-        return {}
-    except Exception as e:
-        print(f"Error reading HTML file: {e}")
+    if not html_content:
+        print("Error: No HTML content provided to extract_html_sections.", file=sys.stderr)
         return {}
 
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -183,14 +182,42 @@ def save_to_json(data, json_filepath):
 #      return ""
 
 if __name__ == "__main__":
-    input_html_file = 'itaa1997.html'
-    output_json_file = 'sections_mammoth_html.json'
-    
-    sections = extract_html_sections(input_html_file)
-    
-    if sections:
-      save_to_json(sections, output_json_file)
+    # Read input and output paths from command-line arguments
+    if len(sys.argv) != 3:
+        print(f"Usage: python {os.path.basename(__file__)} <input_mammoth_json> <output_parsed_json>", file=sys.stderr)
+        sys.exit(1)
+
+    input_json_path = sys.argv[1]
+    output_json_path = sys.argv[2]
+
+    # Load the HTML content from the input JSON file
+    html_to_parse = None
+    try:
+        with open(input_json_path, 'r', encoding='utf-8') as f_in:
+            data = json.load(f_in)
+            # Assuming the JSON structure from process_act.py is {"html_content": "..."}
+            if "html_content" in data:
+                html_to_parse = data["html_content"]
+            else:
+                print(f"Error: Input JSON '{input_json_path}' does not contain 'html_content' key.", file=sys.stderr)
+                sys.exit(1)
+    except FileNotFoundError:
+        print(f"Error: Input JSON file not found at '{input_json_path}'", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from '{input_json_path}'", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error reading input JSON file '{input_json_path}': {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Process the loaded HTML
+    sections = extract_html_sections(html_to_parse)
+
+    # Save the results to the specified output JSON path
+    if sections is not None: # Check if processing was successful (extract_html_sections might return None on error)
+      save_to_json(sections, output_json_path)
     else:
-      # Save an empty JSON if no sections found or error occurred
-      save_to_json({}, output_json_file)
-      print("No sections extracted, saving empty JSON.") 
+      # Handle case where extraction failed
+      print(f"Error during HTML section extraction from '{input_json_path}'. Saving empty JSON to '{output_json_path}'.", file=sys.stderr)
+      save_to_json({}, output_json_path) 

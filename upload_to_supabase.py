@@ -3,9 +3,11 @@ import json
 from supabase import create_client, Client
 from dotenv import load_dotenv
 import time
+import sys # Import sys for command-line arguments
+import datetime # Import datetime module
 
 # --- Configuration ---
-SOURCE_JSON_FILE = 'sections_with_embeddings.json'
+# SOURCE_JSON_FILE = 'sections_with_embeddings.json' # Replaced by sys.argv
 SUPABASE_TABLE_NAME = 'sections' # The table name you created in Supabase
 BATCH_SIZE = 100 # Number of records to insert in one go
 # --- Configuration End ---
@@ -37,12 +39,18 @@ def load_json_data(filepath):
         print(f"An unexpected error occurred while loading {filepath}: {e}")
         return None
 
-def main():
+def main(source_json_filepath):
+    print("--- Starting Supabase Upload ---") # Start marker
+    # Get the current timestamp for this run
+    run_timestamp_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    print(f"Processing run timestamp: {run_timestamp_iso}")
+
     # Load the data with embeddings
-    sections_data = load_json_data(SOURCE_JSON_FILE)
+    sections_data = load_json_data(source_json_filepath)
     if not sections_data or not isinstance(sections_data, dict):
         print("Exiting due to issues loading or validating input JSON data.")
-        return
+        print("--- Finished Supabase Upload (with error) ---") # End marker
+        sys.exit(1)
 
     # Initialize Supabase client
     try:
@@ -50,7 +58,8 @@ def main():
         print("Supabase client initialized successfully.")
     except Exception as e:
         print(f"Error initializing Supabase client: {e}")
-        return
+        print("--- Finished Supabase Upload (with error) ---") # End marker
+        sys.exit(1)
 
     # Prepare data for batch insertion
     records_to_insert = []
@@ -67,7 +76,8 @@ def main():
             'text_content': data.get('text_for_embedding'), # Map 'text_for_embedding' to 'text_content'
             'char_count': data.get('char_count'),
             'heading_text': data.get('heading_text'),
-            'embedding': data.get('embedding') # Ensure this key exists and contains the list of floats
+            'embedding': data.get('embedding'), # Ensure this key exists and contains the list of floats
+            'last_updated': run_timestamp_iso # Add the timestamp for this run
         }
         # Add only if embedding exists to avoid errors
         if record['embedding'] and record['section_key']: # Also check key exists
@@ -80,7 +90,8 @@ def main():
 
     if not records_to_insert:
         print("No records to insert.")
-        return
+        print("--- Finished Supabase Upload (no records) ---") # End marker
+        sys.exit(0)
 
     # Insert data in batches
     print(f"Starting batch insertion (batch size: {BATCH_SIZE})...")
@@ -120,9 +131,22 @@ def main():
     print(f"\nFinished insertion.")
     print(f"Attempted to insert/upsert {inserted_count} records (out of {total_records} prepared).")
     print(f"Total time: {end_time - start_time:.2f} seconds.")
+    print("--- Finished Supabase Upload (successfully) ---") # End marker
 
 if __name__ == "__main__":
+    # Expect one argument: input JSON path
+    if len(sys.argv) != 2:
+        print(f"Usage: python {os.path.basename(sys.argv[0])} <input_json_file>")
+        sys.exit(1)
+
+    input_json_path = sys.argv[1]
+
+    # Ensure input file exists
+    if not os.path.exists(input_json_path):
+        print(f"Error: Input JSON file not found at '{input_json_path}'", file=sys.stderr)
+        sys.exit(1)
+
     # Create a .env file in the same directory with:
     # SUPABASE_URL=your_supabase_project_url
     # SUPABASE_KEY=your_supabase_anon_or_service_key
-    main()
+    main(input_json_path)

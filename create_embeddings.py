@@ -2,10 +2,12 @@ import json
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import time # Optional: for timing the process
+import sys # Import sys for command-line arguments
+import os # Import os for path operations
 
-# --- Configuration ---
-INPUT_JSON_FILE = 'sections_mammoth_html.json'
-OUTPUT_JSON_FILE = 'sections_with_embeddings.json'
+# --- Configuration (Defaults/Constants) ---
+# INPUT_JSON_FILE = 'sections_mammoth_html.json' # Replaced by sys.argv
+# OUTPUT_JSON_FILE = 'sections_with_embeddings.json' # Replaced by sys.argv
 MODEL_NAME = 'BAAI/bge-large-en-v1.5'
 # Set batch size based on your available memory (GPU or CPU)
 # Lower this if you encounter memory errors
@@ -40,12 +42,13 @@ def save_json_data(data, filepath):
     except Exception as e:
         print(f"Error saving data to JSON: {e}")
 
-def main():
+def main(input_filepath, output_filepath):
+    print("--- Starting Embedding Creation ---") # Added start marker
     # Load the data
-    sections_data = load_json_data(INPUT_JSON_FILE)
+    sections_data = load_json_data(input_filepath)
     if not sections_data or not isinstance(sections_data, dict):
         print("Exiting due to issues loading or validating input JSON data.")
-        return
+        sys.exit(1) # Exit if loading fails
 
     # Prepare texts and corresponding keys for embedding
     keys_list = []
@@ -67,8 +70,8 @@ def main():
     if not texts_to_embed:
         print("No valid texts found to embed. Saving original data (or empty if none loaded).")
         # Optionally save the original (potentially filtered) data back or just exit
-        # save_json_data(sections_data, OUTPUT_JSON_FILE) # Uncomment to save even if no embeddings
-        return
+        save_json_data(sections_data, output_filepath) # Save even if no embeddings generated
+        sys.exit(0) # Exit successfully, as no work needed
 
     print(f"Found {valid_section_count} sections with valid text to embed.")
 
@@ -79,7 +82,7 @@ def main():
         print("Model loaded successfully.")
     except Exception as e:
         print(f"Error loading SentenceTransformer model: {e}")
-        return
+        sys.exit(1) # Exit if model loading fails
 
     # Generate embeddings in batches
     print(f"Generating embeddings for {len(texts_to_embed)} texts (batch size: {BATCH_SIZE})...")
@@ -99,7 +102,29 @@ def main():
         sections_data[key]['embedding'] = all_embeddings[i].tolist()
 
     # Save the updated data
-    save_json_data(sections_data, OUTPUT_JSON_FILE)
+    save_json_data(sections_data, output_filepath)
+    print("--- Finished Embedding Creation --- N") # Added end marker
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 3:
+        print(f"Usage: python {os.path.basename(sys.argv[0])} <input_json_file> <output_json_file>")
+        sys.exit(1)
+
+    input_json_path = sys.argv[1]
+    output_json_path = sys.argv[2]
+
+    # Ensure input file exists
+    if not os.path.exists(input_json_path):
+        print(f"Error: Input JSON file not found at '{input_json_path}'", file=sys.stderr)
+        sys.exit(1)
+        
+    # Ensure output directory exists
+    output_dir = os.path.dirname(output_json_path) or '.'
+    if output_dir != '.':
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as e:
+            print(f"Error: Could not create output directory '{output_dir}': {e}", file=sys.stderr)
+            sys.exit(1)
+
+    main(input_json_path, output_json_path)
