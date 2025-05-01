@@ -239,156 +239,75 @@ def extract_html_sections(html_content):
     # Return both the dictionary and the ordered list of keys
     return sections_dict, ordered_keys 
 
-# --- Final Post-Processing Function ---
-def post_process_final(sections_dict, ordered_keys):
-    """
-    Performs final post-processing:
-    1. Processes 'Table of sections' blocks in-place.
-    2. Merges non-Section elements (Chapter, Part, Division, Subdivision, Guide) 
-       forward onto the next element's HTML.
-    3. Removes the original merged non-Section elements.
-    Returns the modified dictionary containing only the final consolidated entries.
-    """
-    logging.info("Starting final post-processing...")
-    
-    # --- Stage 1: Process Tables of Sections In-Place ---    
-    logging.info("  Stage 1: Processing 'Table of sections' in-place...")
-    table_modified_count = 0
-    # (Keep table processing patterns and helper function here)
-    section_ref_pattern = re.compile(r'^\s*(\d+(?:[-‑]\d+)?[A-Z]?)[\s\u00A0\t]+(.+?)(?:\s+\d+)?$')
-    section_heading_pattern = re.compile(r'^\s*(?:<a\s+id="_Toc[^"]+"></a>)?\s*(\d+(?:[-‑]\d+)?[A-Z]?)[\s\u00A0\t]+(.+?)(?:\s+\d+)?$')
-    def clean_text_for_matching(text):
-        soup = BeautifulSoup(text, 'html.parser')
-        return ' '.join(soup.stripped_strings)
-        
-    for key in list(sections_dict.keys()): 
-        if key not in sections_dict: continue 
-        section = sections_dict[key]
-        if 'html' not in section or not section['html']:
-            continue
-        # (Existing table finding and processing logic remains exactly the same)
-        soup = BeautifulSoup(section['html'], 'html.parser')
-        table_header_tag = None
-        for p_tag in soup.find_all('p'):
-            if p_tag.get_text(strip=True).lower() == 'table of sections':
-                table_header_tag = p_tag
-                logging.debug(f"    Found 'Table of sections' paragraph within key '{key}'. Processing in-place.")
-                break 
-        if table_header_tag:
-            # (... Existing logic to find refs, build ul, insert_after, decompose refs ...) 
-            # ... (Assume this logic is correct as implemented previously) ...
-            section_refs = []
-            tags_to_process = [table_header_tag] 
-            next_tag = table_header_tag.find_next_sibling()
-            while next_tag and next_tag.name == 'p':
-                current_tag_being_checked = next_tag 
-                next_tag = current_tag_being_checked.find_next_sibling()
-                html = str(current_tag_being_checked)
-                text = current_tag_being_checked.get_text(strip=True)
-                if section_heading_pattern.search(html) and '<a id="_Toc' in html: break
-                cleaned_text = clean_text_for_matching(html)
-                match = section_ref_pattern.match(cleaned_text)
-                if match:
-                    section_num = match.group(1)
-                    section_num_end = html.find(section_num) + len(section_num)
-                    title_html = html[section_num_end:].strip()
-                    if title_html.startswith('</p>'): title_html = ''
-                    title_html = re.sub(r'^[\s\t]+', '', title_html)
-                    section_refs.append((section_num, title_html))
-                    tags_to_process.append(current_tag_being_checked) 
-                else: break 
-            if section_refs:
-                ul = soup.new_tag('ul')
-                for section_num, title_html in section_refs:
-                    li = soup.new_tag('li')
-                    # ... (li creation logic) ...
-                    if title_html:
-                        try:
-                            title_soup = BeautifulSoup(title_html, 'html.parser')
-                            inner_content = title_soup.find('p')
-                            inner_content = inner_content.decode_contents() if inner_content else title_html
-                            li_html = f"{section_num} {inner_content}"
-                            li.append(BeautifulSoup(li_html, 'html.parser'))
-                        except Exception as e:
-                            li.string = f"{section_num} {BeautifulSoup(title_html, 'html.parser').get_text(strip=True)}"
-                    else:
-                        li.string = section_num
-                    ul.append(li)
-                table_header_tag.insert_after(ul)
-                for tag_to_remove in tags_to_process[1:]:
-                     if tag_to_remove and tag_to_remove.parent: tag_to_remove.decompose()
-                section['html'] = str(soup)
-                section['text_for_embedding'] = clean_html_for_embedding(section['html'])
-                section['char_count'] = len(section['text_for_embedding'])
-                table_modified_count += 1
-            else:
-                 logging.debug(f"    Found 'Table of sections' in '{key}' but no references followed.")
-                 
-    logging.info(f"  Stage 1 (Tables) finished. Processed {table_modified_count} tables.")
-
-    # --- Stage 2: Merge Non-Section Hierarchy Forward ---    
-    logging.info("  Stage 2: Merging non-Section elements forward...")
-    keys_to_remove = set() # Use set for efficient addition and check
-    forward_merged_count = 0
-
-    for i in range(len(ordered_keys) - 1):
-        current_key = ordered_keys[i]
-        next_key = ordered_keys[i+1]
-
-        # Skip if current key was already removed or is marked for removal
-        if current_key not in sections_dict or current_key in keys_to_remove:
-            logging.debug(f"    Skipping merge for '{current_key}' (already merged or marked for removal).")
-            continue 
-            
-        current_section = sections_dict[current_key]
-        structure_type = current_section.get('structure_type')
-
-        # Only merge if it's NOT a Section
-        if structure_type != 'Section':
-            logging.debug(f"    Attempting merge for '{current_key}' (Type: {structure_type}) forward into '{next_key}'")
-            
-            # Ensure the target (next key) exists and hasn't been marked for removal itself
-            if next_key in sections_dict and next_key not in keys_to_remove:
-                target_section = sections_dict[next_key]
-                # HTML already includes in-place table processing from Stage 1
-                current_html = current_section.get('html', '') 
-                target_html = target_section.get('html', '')
-
-                if current_html:
-                    # Clean trailing numbers from the current html string
-                    cleaned_html = re.sub(r'\s+\d+\s*(?=</[^>]+>\s*$)', '', current_html.strip())
-                    # (Add logging for cleaning if needed)
-                                        
-                    logging.debug(f"      Merging '{current_key}' HTML into '{next_key}'.")
-                    target_section['html'] = cleaned_html + "\n" + target_html
-                    target_text = clean_html_for_embedding(target_section['html'])
-                    target_section['text_for_embedding'] = target_text
-                    target_section['char_count'] = len(target_text)
-
-                    keys_to_remove.add(current_key) # Mark current key for removal
-                    forward_merged_count += 1
-                else:
-                    logging.warning(f"    Non-Section element '{current_key}' has no HTML content to merge. Marking for removal.")
-                    keys_to_remove.add(current_key)
-            else:
-                logging.warning(f"    Cannot merge '{current_key}': Target '{next_key}' missing or marked for removal. Marking '{current_key}' for removal.")
-                keys_to_remove.add(current_key)
-        else:
-            logging.debug(f"    Skipping merge for '{current_key}' (Type: Section)")
-
-    # Remove the merged keys
-    logging.info(f"    Removing {len(keys_to_remove)} merged non-Section elements...")
-    for key in keys_to_remove:
-        if key in sections_dict:
-            # logging.debug(f"      Removing merged key: '{key}'") # Can be verbose
-            del sections_dict[key]
-        else:
-            logging.debug(f"      Attempted to remove key '{key}' but it was already gone.")
-            
-    logging.info(f"  Stage 2 (Forward Merge) finished. Merged {forward_merged_count} elements.")
-
-    logging.info(f"Final post-processing finished. Final dictionary has {len(sections_dict)} entries.")
+# --- Table of Sections Processing Function ---
+def post_process_table_of_sections(sections_dict, ordered_keys):
+    # ... (Existing function code) ...
     return sections_dict
+
+# --- Build Final Content Function ---
+def build_final_content(sections_dict, ordered_keys):
+    """
+    Builds the final dictionary structure:
+    1. Copies original non-Section elements.
+    2. Creates new Section entries with prepended context HTML gathered from 
+       preceding non-Section elements.
+    Assumes table processing has already happened in sections_dict.
+    Returns the final dictionary with all elements.
+    """
+    logging.info("Starting build of final content structure...")
+    final_dict = {}
+    current_context_html = "" # Accumulates HTML from preceding non-Sections
+    
+    for key in ordered_keys:
+        if key not in sections_dict: 
+             logging.warning(f"  Key '{key}' from ordered_keys not found in sections_dict during build. Skipping.")
+             continue
+             
+        current_section = sections_dict[key]
+        structure_type = current_section.get('structure_type')
+        # Get HTML which might have been modified by table processing
+        current_html = current_section.get('html', '') 
+
+        logging.debug(f"  Building: Processing key '{key}', type: {structure_type}")
+
+        # Process based on type
+        if structure_type != 'Section':
+            # --- Non-Section Element --- 
+            logging.debug(f"    Keeping original non-Section: '{key}'")
+            # 1. Copy original element to the final dictionary
+            final_dict[key] = current_section.copy() # Use copy to be safe
+            
+            # 2. Clean its HTML and add it to the context for subsequent sections
+            if current_html:
+                 cleaned_html = re.sub(r'\s+\d+\s*(?=</[^>]+>\s*$)', '', current_html.strip())
+                 current_context_html += cleaned_html + "\n"
+                 logging.debug(f"    Added HTML from '{key}' to context.")
+            
+        else: # structure_type == 'Section'
+            # --- Section Element --- 
+            logging.debug(f"    Building consolidated Section: '{key}'")
+            # 1. Combine accumulated context with this section's HTML
+            # Use original current_html (not cleaned) for the section itself
+            combined_html = current_context_html + current_html if current_context_html else current_html
+            
+            # 2. Create the new consolidated section entry in final_dict
+            final_dict[key] = {
+                'structure_type': structure_type,
+                'heading_text': current_section.get('heading_text', ''),
+                'full_id': current_section.get('full_id'),
+                'primary_id': current_section.get('primary_id'),
+                'secondary_id': current_section.get('secondary_id'),
+                'html': combined_html,
+                'text_for_embedding': clean_html_for_embedding(combined_html),
+                'char_count': len(clean_html_for_embedding(combined_html))
+            }
+            
+            # 3. Reset the context for the next block
+            logging.debug(f"    Resetting context after Section '{key}'.")
+            current_context_html = "" 
+            
+    logging.info(f"Finished building final content. Final dictionary has {len(final_dict)} entries.")
+    return final_dict
 
 def save_to_json(data, json_filepath):
     """Saves the dictionary to a JSON file."""
@@ -451,17 +370,20 @@ if __name__ == "__main__":
     logging.info("Starting HTML section extraction...")
     sections, ordered_keys = extract_html_sections(html_to_parse) # Get both dict and ordered keys
 
-    # Perform Combined Post-Processing Steps
-    processed_sections = sections # Start with the initially parsed sections
+    # Perform Post-Processing Steps
     if sections and ordered_keys: # Ensure we have data to process
-        processed_sections = post_process_final(processed_sections, ordered_keys)
+        # 1. Process Tables of Sections first (modifies sections dict in-place)
+        processed_sections = post_process_table_of_sections(sections, ordered_keys)
+        # 2. Build the final content structure (copies originals, builds new sections)
+        final_content = build_final_content(processed_sections, ordered_keys)
     else:
         logging.warning("Skipping post-processing as no sections or ordered keys were generated.")
+        final_content = sections # Assign original if no processing happened
 
     # Save the final results to the specified output JSON path
-    if processed_sections is not None: 
+    if final_content is not None: 
       logging.info(f"Saving final processed sections to: {output_json_path}") 
-      save_to_json(processed_sections, output_json_path)
+      save_to_json(final_content, output_json_path)
     else:
       # This case might be less likely now, but kept for safety
       logging.error(f"Error during HTML processing or post-processing. Saving empty/original JSON to '{output_json_path}'.") 
