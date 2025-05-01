@@ -1,21 +1,45 @@
 #!/bin/bash
 
-# Step 1: Activate the virtual environment
+# Simple script to start the auth server and the Streamlit UI
+
+# Navigate to the script's directory to ensure relative paths work correctly
+cd "$(dirname "$0")"
+
+# Activate the virtual environment (assumes .venv is one level up)
 echo "Activating virtual environment..."
-source venv/bin/activate
+source ../.venv/bin/activate
 
-# Step 2: Start FastAPI auth server in the background
-echo "Starting FastAPI auth server..."
-nohup uvicorn auth_server:app --host 0.0.0.0 --port 8000 > auth_server.log 2>&1 &
+# Check if activation succeeded
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to activate virtual environment. Ensure '../.venv' exists."
+    exit 1
+fi
+echo "Virtual environment activated."
 
-# Step 3: Save the process ID so you can kill it later if needed
-echo $! > fastapi_pid.txt
+# Start the FastAPI authentication server in the background
+echo "Starting authentication server (auth_server.py) in the background..."
+python auth_server.py &
+AUTH_SERVER_PID=$!
+echo "Auth server started with PID: $AUTH_SERVER_PID"
 
-# Step 4: Start Streamlit app
-echo "Starting Streamlit app..."
+# Give the server a moment to start up
+sleep 2
+
+# Start the Streamlit app in the foreground
+echo "Starting Streamlit application (app.py)..."
 streamlit run app.py
 
-# Step 5: (Optional) After Streamlit app stops, kill FastAPI server
-echo "Shutting down FastAPI auth server..."
-kill $(cat fastapi_pid.txt)
-rm fastapi_pid.txt
+# --- Cleanup ---
+# This part runs after Streamlit exits (e.g., Ctrl+C)
+echo "Streamlit app finished."
+echo "Attempting to stop the background auth server (PID: $AUTH_SERVER_PID)..."
+
+# Check if the process exists before trying to kill it
+if kill -0 $AUTH_SERVER_PID > /dev/null 2>&1; then
+    kill $AUTH_SERVER_PID
+    echo "Auth server stopped."
+else
+    echo "Auth server (PID: $AUTH_SERVER_PID) was already stopped."
+fi
+
+echo "Script finished."

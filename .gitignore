@@ -21,8 +21,9 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
+.env
 env/
+venv/
 ENV/
 .venv/
 
@@ -46,4 +47,17 @@ Thumbs.db
 *.wmf
 *.emf
 *.png
+
+# Logs
+*.log
+
+# Word temporary files
+~$*.docx
+
+# Images
+images/
+Legislation/Tax_Act/Images/
+
+# Keep example.env but ignore actual .env files
+!.env.example
  

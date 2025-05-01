@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 from supabase import create_client, Client
 from sentence_transformers import SentenceTransformer
 import sys
+import torch # Ensure torch is imported if it wasn't already
+
+# --- Add the workaround line ---
+torch.classes.__path__ = []
+# --- End workaround ---
 
 # --- Configuration Loading (Adapted for Streamlit) ---
 load_dotenv()
@@ -66,6 +71,10 @@ def init_supabase_client(url, key):
         print(f"Error initializing Supabase client: {e}") # Server log
         st.stop()
 
+# --- Moved Function Definitions ---
+# @st.cache_resource ... get_embedding_model definition removed from here
+# @st.cache_resource ... init_supabase_client definition removed from here
+
 # --- Embedding Generation ---
 # No caching here as query changes
 def get_query_embedding(query: str, model: SentenceTransformer) -> list[float] | None:
@@ -116,10 +125,6 @@ def search_similar_sections(supabase: Client, search_function: str, query_embedd
 # 1. Load Configuration
 config = load_app_config()
 
-# 2. Initialize Model and Client (will be cached after first run)
-model = get_embedding_model(config["embedding_model_name"])
-supabase_client = init_supabase_client(config["supabase_url"], config["supabase_key"])
-
 # 3. Authentication Check (Existing Logic)
 if 'user' not in st.session_state:
     st.session_state['user'] = None
@@ -165,6 +170,12 @@ allowed_domain = config["allowed_domain"] # Get from config
 if not user_email.endswith(f"@{allowed_domain}"):
     st.error(f"🚫 Access denied. You must use a @{allowed_domain} email address.")
     st.stop()
+
+# --- Define and Initialize AFTER Auth/Domain Checks --- 
+
+# --- Actual Initialization Calls ---
+model = get_embedding_model(config["embedding_model_name"])
+supabase_client = init_supabase_client(config["supabase_url"], config["supabase_key"])
 
 # --- Main App Content Area ---
 st.title("📚 Legislative Document Search")
