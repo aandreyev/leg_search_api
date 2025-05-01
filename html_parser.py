@@ -76,9 +76,10 @@ def extract_html_sections(html_content):
     }
     # --- End Patterns ---
 
-    current_key = None # Changed variable name for clarity
+    current_key = None
     current_html_snippet_tags = []
     found_first_section = False
+    in_table_of_sections = False # State flag
 
     content_tags = soup.body.find_all(recursive=False) if soup.body else []
     if not content_tags:
@@ -94,28 +95,66 @@ def extract_html_sections(html_content):
             raw_text = tag.get_text(" ", strip=True)
             # --- Normalize text FIRST --- 
             text = normalize_hyphens(raw_text)
-            logging.debug(f"  Raw Text: '{raw_text}'") # Log raw text
-            logging.debug(f"  Normalized Text: '{text}'") # Log normalized text
-            # --- End Normalization ---
+            logging.debug(f"  Raw Text: '{raw_text}'")
+            logging.debug(f"  Normalized Text: '{text}'")
         except AttributeError:
             text = ""
             raw_text = ""
 
+        # --- State Handling for Table of Sections ---
+        is_definitive_heading = False
+        if hasattr(tag, 'find') and tag.find('a', id=re.compile(r'^_Toc')):
+             is_definitive_heading = True
+             logging.debug("  Tag contains a TOC anchor, likely a definitive heading.")
+
+        if in_table_of_sections:
+            # If we are in a table, check if this tag marks the end of it
+            if is_definitive_heading or any(p.match(text) for p_name, p in patterns.items() if p_name != 'Section'): # Check higher-level patterns too
+                logging.debug("  >>> Exiting table of sections mode.")
+                in_table_of_sections = False
+                # Fall through to normal processing for this tag
+            else:
+                # Still in table, just append the tag to the current section
+                if current_key and found_first_section:
+                     logging.debug(f"  [In Table Mode] Appending tag to section '{current_key}'")
+                     current_html_snippet_tags.append(tag)
+                     continue # Skip normal pattern matching for this tag
+                else:
+                     logging.warning("[In Table Mode] Found table line but no current section active. Skipping.")
+                     continue
+
+        # Check if this tag *starts* a table of sections (only if not already in one)
+        if not in_table_of_sections and tag.name == 'p' and text.lower() == 'table of sections':
+            logging.debug("  >>> Entering table of sections mode.")
+            in_table_of_sections = True
+            # Append this header tag to the current section and continue
+            if current_key and found_first_section:
+                logging.debug(f"  Appending 'Table of sections' header to section '{current_key}'")
+                current_html_snippet_tags.append(tag)
+                continue
+            else:
+                logging.warning("Found 'Table of sections' header but no current section active. Skipping.")
+                continue
+        # --- End State Handling ---
+
+        # --- Normal Pattern Matching --- 
         matched_level = None
         match_obj = None
         heading_text = ""
         if text:
             logging.debug("  Checking patterns against NORMALIZED text...")
             for level, pattern in patterns.items():
-                match_obj = pattern.match(text) # Match against normalized text
+                match_obj = pattern.match(text)
                 match_result = "MATCH" if match_obj else "NO MATCH"
                 logging.debug(f"    Pattern '{level}': {match_result}")
                 if match_obj:
+                    # Check if it's a weak 'Section' match that should be ignored
+                    # (Could add more sophisticated checks here if needed)
+                    # For now, if it matched, we assume it's a real heading *unless* in_table_of_sections was true (handled above)
                     matched_level = level
                     logging.debug(f"  >>> Matched as '{matched_level}'")
                     try:
                         group_index = 3 if level == 'Guide' else 2
-                        # Extract heading from the normalized text match
                         heading_text = match_obj.group(group_index).strip() if match_obj.group(group_index) else ""
                         heading_text = re.sub(r'\s+', ' ', heading_text).strip()
                     except IndexError:
@@ -123,76 +162,72 @@ def extract_html_sections(html_content):
                     break
 
         if matched_level:
+            # Finalize the previous section (if any)
             if current_key and current_html_snippet_tags:
                 html_string = "\n".join(str(t) for t in current_html_snippet_tags)
                 text_for_embedding = clean_html_for_embedding(html_string)
-                # Ensure entry exists before updating
                 if current_key in sections_dict:
                     sections_dict[current_key]["html"] = html_string
                     sections_dict[current_key]["char_count"] = len(text_for_embedding)
                     sections_dict[current_key]["text_for_embedding"] = text_for_embedding
                 else:
-                    # This case should ideally not happen if logic is correct
                     logging.warning(f"Attempted to finalize section '{current_key}' which was not properly initialized.")
 
+            # Start the new section
             identifier = None
             new_key = None
             section_info = {
                 "structure_type": matched_level,
                 "heading_text": heading_text
             }
-
             id_group_index = 2 if level == 'Guide' else 1
             identifier = match_obj.group(id_group_index)
 
             if matched_level == 'Guide':
                 guide_type = match_obj.group(1)
-                # Construct unique key for Guides
                 new_key = f"Guide to {guide_type}-{identifier}" 
                 section_info["guide_target_type"] = guide_type
             else: # Chapter, Part, Division, Subdivision, Section
-                # Construct unique key using structure_type and identifier
                 new_key = f"{matched_level}-{identifier}"
 
             if identifier:
                 section_info["full_id"] = identifier 
 
-                id_parts = identifier.split(standard_hyphen) # Split normalized ID
+                id_parts = identifier.split(standard_hyphen)
                 if len(id_parts) > 0:
                     section_info["primary_id"] = id_parts[0]
                 if len(id_parts) > 1:
                     section_info["secondary_id"] = id_parts[1]
 
-            current_key = new_key # Use the new unique key
+            current_key = new_key
             if current_key:
                 logging.debug(f"  >>> Starting new section: Key='{current_key}', Info={section_info}")
-                # Add checks to prevent overwriting if key collision (unlikely now)
                 if current_key in sections_dict:
                      logging.warning(f"Duplicate unique key detected: '{current_key}'. Overwriting previous entry.")
                 sections_dict[current_key] = section_info
-                ordered_keys.append(current_key) # Add key to ordered list
-                current_html_snippet_tags = [tag] # Start HTML with the original tag
+                ordered_keys.append(current_key)
+                current_html_snippet_tags = [tag] # Start HTML with the matched tag
                 found_first_section = True
             else:
                 logging.debug(f"  >>> WARNING: Could not determine key for matched text.")
                 logging.warning(f"Could not determine key for matched text: {text[:100]}...") 
 
         elif current_key and found_first_section:
-             logging.debug(f"  Appending tag to section '{current_key}'")
-             # Ensure the list exists before appending (should always exist here)
-             if current_key in sections_dict:
+             # This tag didn't match any pattern, append to current section
+             logging.debug(f"  Appending non-matching tag to section '{current_key}'")
+             if current_key in sections_dict: # Check necessary?
                  current_html_snippet_tags.append(tag)
              else:
                   logging.warning(f"Attempted to append tag to uninitialized section '{current_key}'. Tag: {str(tag)[:100]}")
         else:
-            logging.debug(f"  Tag did not match and no current section active. Skipping.")
+             # Before the first section or error
+             logging.debug(f"  Tag did not match and no current section active. Skipping.")
 
     # Finalize the last section
     if current_key and current_html_snippet_tags:
         logging.debug(f"\nFinalizing last section: Key='{current_key}'")
         html_string = "\n".join(str(t) for t in current_html_snippet_tags)
         text_for_embedding = clean_html_for_embedding(html_string)
-        # Ensure entry exists before updating
         if current_key in sections_dict:
             sections_dict[current_key]["html"] = html_string
             sections_dict[current_key]["char_count"] = len(text_for_embedding)
@@ -205,79 +240,216 @@ def extract_html_sections(html_content):
     return sections_dict, ordered_keys 
 
 def post_process_table_of_sections(sections_dict, ordered_keys):
-    """Moves 'Table of sections' paragraphs to the preceding structural element."""
+    """
+    Searches within each section's HTML for a 'Table of sections' paragraph.
+    If found, converts the subsequent section reference paragraphs into a proper
+    HTML list structure (ul/li) within that same section's HTML.
+    """
     logging.info("Starting post-processing for 'Table of sections'...")
-    keys_to_delete = [] # Keep track of fully emptied sections if any
     modified_count = 0
 
-    for i in range(1, len(ordered_keys)):
-        current_key = ordered_keys[i]
-        prev_key = ordered_keys[i-1]
+    # Patterns and helper function remain the same
+    section_ref_pattern = re.compile(r'^\s*(\d+(?:[-‑]\d+)?[A-Z]?)[\s\u00A0\t]+(.+?)(?:\s+\d+)?$')
+    section_heading_pattern = re.compile(r'^\s*(?:<a\s+id="_Toc[^"]+"></a>)?\s*(\d+(?:[-‑]\d+)?[A-Z]?)[\s\u00A0\t]+(.+?)(?:\s+\d+)?$')
 
-        if current_key not in sections_dict or prev_key not in sections_dict:
-            logging.warning(f"Skipping post-processing check between '{prev_key}' and '{current_key}': one or both keys missing.")
+    def clean_text_for_matching(text):
+        soup = BeautifulSoup(text, 'html.parser')
+        return ' '.join(soup.stripped_strings)
+
+    # Iterate through each section identified by the parser
+    for key in ordered_keys:
+        if key not in sections_dict:
+            logging.warning(f"Skipping post-processing for key '{key}': key missing from dictionary.")
             continue
 
-        current_section = sections_dict[current_key]
-        prev_section = sections_dict[prev_key]
+        section = sections_dict[key]
 
-        if 'html' not in current_section or not current_section['html']:
-            continue # Skip if current section has no HTML
+        if 'html' not in section or not section['html']:
+            continue
+
+        logging.debug(f"Post-processing key: '{key}'")
         
-        # Use BeautifulSoup to parse the current section's HTML
-        # This is slightly inefficient but safer for manipulating HTML
-        soup = BeautifulSoup(current_section['html'], 'html.parser')
-        tags_to_move = []
-        first_tag = soup.find(True) # Find the very first tag
+        # Parse the HTML content of the current section
+        soup = BeautifulSoup(section['html'], 'html.parser')
+        
+        # Find the 'Table of sections' paragraph within this section
+        table_header_tag = None
+        logging.debug(f"  Searching for 'Table of sections' in <p> tags for key '{key}'...")
+        for p_tag in soup.find_all('p'):
+            p_text_lower_stripped = p_tag.get_text(strip=True).lower()
+            # Log the text being checked for every p tag
+            logging.debug(f"    Checking p_tag text: '{p_text_lower_stripped}' (HTML: {str(p_tag)[:100]}...)")
+            if p_text_lower_stripped == 'table of sections':
+                table_header_tag = p_tag
+                # Make this log more prominent
+                logging.info(f"  *** FOUND 'Table of sections' paragraph in key '{key}'. ***")
+                break # Found the first instance
 
-        if first_tag and first_tag.name == 'p' and first_tag.get_text(strip=True).lower() == 'table of sections':
-            logging.debug(f"  Found 'Table of sections' at start of key '{current_key}'. Checking previous key '{prev_key}'.")
-            tags_to_move.append(first_tag)
-            # Optional: Check for subsequent <ul> or <ol> to move as well (more complex)
-            # next_sibling = first_tag.find_next_sibling()
-            # while next_sibling and next_sibling.name in ['ul', 'ol']:
-            #    tags_to_move.append(next_sibling)
-            #    next_sibling = next_sibling.find_next_sibling()
-            
-            if tags_to_move:
-                logging.info(f"  Moving 'Table of sections' tag(s) from '{current_key}' to '{prev_key}'.")
-                # Extract tags to move from the current soup
-                extracted_html = "\n".join(str(tag.extract()) for tag in tags_to_move)
-                
-                # Append extracted HTML to previous section's HTML
-                prev_html = prev_section.get('html', '')
-                prev_section['html'] = prev_html + "\n" + extracted_html
-                
-                # Update previous section's text and char count
-                prev_text = clean_html_for_embedding(prev_section['html'])
-                prev_section['text_for_embedding'] = prev_text
-                prev_section['char_count'] = len(prev_text)
+        if table_header_tag:
+            # Start processing subsequent siblings for section references
+            section_refs = []
+            tags_to_process = [table_header_tag] # Keep track of tags related to the table
+            next_tag = table_header_tag.find_next_sibling()
+            logging.debug(f"  Sibling after 'Table of sections': {str(next_tag)[:200]}...")
 
-                # Update current section's HTML (now without the moved tags)
-                current_section['html'] = str(soup)
-                # Update current section's text and char count
-                current_text = clean_html_for_embedding(current_section['html'])
-                current_section['text_for_embedding'] = current_text
-                current_section['char_count'] = len(current_text)
+            while next_tag and next_tag.name == 'p':
+                # Keep track of the tag we are currently processing
+                current_tag_being_checked = next_tag 
+                # Move to the next sibling *before* potentially breaking the loop
+                next_tag = current_tag_being_checked.find_next_sibling()
+
+                html = str(current_tag_being_checked)
+                text = current_tag_being_checked.get_text(strip=True)
+                logging.debug(f"  Processing paragraph HTML: {html}")
+
+                # Check 1: Is it an actual section heading with a TOC anchor?
+                if section_heading_pattern.search(html) and '<a id="_Toc' in html:
+                    logging.debug(f"  Stopping: Found actual section heading marker: {text[:50]}...")
+                    break
+                
+                # Check 2: Does it match the section reference pattern?
+                cleaned_text = clean_text_for_matching(html)
+                logging.debug(f"  Checking cleaned text for section reference: '{cleaned_text}'")
+                match = section_ref_pattern.match(cleaned_text)
+                if match:
+                    # It's a valid reference, process it
+                    section_num = match.group(1)
+                    logging.debug(f"    Found section number: {section_num}")
+                    section_num_end = html.find(section_num) + len(section_num)
+                    title_html = html[section_num_end:].strip()
+                    if title_html.startswith('</p>'): title_html = ''
+                    title_html = re.sub(r'^[\s\t]+', '', title_html)
+                    logging.debug(f"    Found title HTML: {title_html}")
+                    section_refs.append((section_num, title_html))
+                    # Add the matched tag to the list of tags to remove later
+                    tags_to_process.append(current_tag_being_checked) 
+                else:
+                    # It's not a section reference, and not a heading marker.
+                    # Assume the table of sections ends here.
+                    logging.debug(f"  Stopping: Paragraph does not match section reference pattern: {text[:50]}...")
+                    break 
+
+            # If we found references, replace the original paragraphs with a list
+            if section_refs:
+                logging.info(f"  Found {len(section_refs)} section references in '{key}'. Creating list.")
+                
+                # Create a new ul tag
+                ul = soup.new_tag('ul')
+                for section_num, title_html in section_refs:
+                    li = soup.new_tag('li')
+                    if title_html:
+                        # Attempt to parse the title HTML fragment
+                        try:
+                            title_soup = BeautifulSoup(title_html, 'html.parser')
+                            # Extract the content without the outer <p> tag if it exists
+                            inner_content = title_soup.find('p')
+                            if inner_content:
+                                inner_content = inner_content.decode_contents()
+                            else: # No <p> tag, use the whole thing
+                                inner_content = title_html
+                            
+                            # Re-parse combined content to ensure validity
+                            li_html = f"{section_num} {inner_content}"
+                            li.append(BeautifulSoup(li_html, 'html.parser'))
+                        except Exception as e:
+                            logging.warning(f"    Error parsing title_html '{title_html}' for section {section_num} in key '{key}': {e}. Using plain text.")
+                            li.string = f"{section_num} {BeautifulSoup(title_html, 'html.parser').get_text(strip=True)}"
+                    else:
+                        li.string = section_num
+                    ul.append(li)
+                
+                # Insert the new list *after* the original table header paragraph
+                table_header_tag.insert_after(ul)
+                
+                # Remove ONLY the subsequent paragraphs that were successfully processed as section references
+                # tags_to_process[0] is the header tag, which should be kept.
+                # tags_to_process[1:] are the section reference tags that need removing.
+                for tag_to_remove in tags_to_process[1:]:
+                     if tag_to_remove and tag_to_remove.parent:
+                          tag_to_remove.decompose()
+                
+                # Update the section's HTML, text, and char count
+                section['html'] = str(soup)
+                section['text_for_embedding'] = clean_html_for_embedding(section['html'])
+                section['char_count'] = len(section['text_for_embedding'])
 
                 modified_count += 1
+            else:
+                 logging.debug(f"  Found 'Table of sections' but no section references followed it in '{key}'.")
 
-                # Optional: If current section becomes empty, mark for deletion
-                # if not soup.find(True): # Check if any tags remain
-                #    logging.info(f"    Section '{current_key}' is now empty after moving tags.")
-                #    keys_to_delete.append(current_key)
+    logging.info(f"Finished post-processing. Processed {modified_count} tables of sections.")
+    return sections_dict
 
-    # Optional: Remove empty sections
-    # if keys_to_delete:
-    #     logging.info(f"Removing {len(keys_to_delete)} sections that became empty.")
-    #     for key in keys_to_delete:
-    #         if key in sections_dict:
-    #             del sections_dict[key]
+def post_process_guides(sections_dict, ordered_keys):
+    """
+    Finds 'Guide to ...' sections and merges their HTML content into the 
+    immediately following section. Removes the original guide section entry.
+    """
+    logging.info("Starting post-processing for 'Guide to ...' sections...")
+    keys_to_remove = []
+    modified_count = 0
 
-    logging.info(f"Finished post-processing. Moved 'Table of sections' for {modified_count} entries.")
-    # The sections_dict is modified in-place, no need to return typically,
-    # but returning it makes the flow explicit.
-    return sections_dict 
+    # Iterate up to the second-to-last key to allow looking ahead
+    for i in range(len(ordered_keys) - 1):
+        current_key = ordered_keys[i]
+        next_key = ordered_keys[i+1]
+
+        # Check if the current key is a Guide
+        if current_key.startswith("Guide to "):
+            logging.debug(f"  Found potential Guide key: '{current_key}'")
+            # Ensure both the guide and the next section exist
+            if current_key in sections_dict and next_key in sections_dict:
+                guide_section = sections_dict[current_key]
+                target_section = sections_dict[next_key]
+
+                # Ensure HTML exists in both
+                guide_html = guide_section.get('html', '')
+                target_html = target_section.get('html', '')
+
+                if guide_html:
+                    # Clean trailing numbers from the guide html string
+                    original_guide_html_for_log = guide_html # Keep for logging
+                    # Regex: Find whitespace (\s+) followed by digits (\d+) that are immediately
+                    # followed by optional whitespace (\s*) and a closing tag (</[^>]+>) at the end of the string.
+                    # Use lookahead (?=...) so the tag isn't part of the match.
+                    cleaned_guide_html = re.sub(r'\s+\d+\s*(?=</[^>]+>\s*$)', '', guide_html.strip())
+                    if cleaned_guide_html != original_guide_html_for_log:
+                        logging.debug(f"  Cleaned guide HTML: '{original_guide_html_for_log}' -> '{cleaned_guide_html}'")
+                    else:
+                        logging.debug(f"  Guide HTML did not require cleaning: '{cleaned_guide_html}'")
+
+                    logging.info(f"  Merging Guide '{current_key}' into '{next_key}'.")
+                    # Prepend the *cleaned* guide HTML to the target section's HTML
+                    target_section['html'] = cleaned_guide_html + "\n" + target_html
+                    
+                    # Update target section's text and char count
+                    target_text = clean_html_for_embedding(target_section['html'])
+                    target_section['text_for_embedding'] = target_text
+                    target_section['char_count'] = len(target_text)
+
+                    # Mark the guide key for removal
+                    keys_to_remove.append(current_key)
+                    modified_count += 1
+                else:
+                    logging.warning(f"  Guide section '{current_key}' has no HTML content to merge. Skipping.")
+                    # Optionally mark for removal even if empty?
+                    keys_to_remove.append(current_key) 
+            else:
+                logging.warning(f"  Found Guide key '{current_key}' but its target '{next_key}' or the guide itself is missing from dict. Cannot merge.")
+                # Mark for removal? If the target is missing, the guide is orphaned.
+                if current_key in sections_dict: # Only mark if guide exists
+                     keys_to_remove.append(current_key)
+
+    # Remove the processed guide keys from the dictionary
+    for key in keys_to_remove:
+        if key in sections_dict:
+            logging.debug(f"  Removing processed Guide key: '{key}'")
+            del sections_dict[key]
+
+    logging.info(f"Finished post-processing Guides. Merged {modified_count} guides.")
+    # Note: ordered_keys list is not modified, but the dictionary is.
+    # Subsequent steps should rely only on the dictionary keys if order matters.
+    return sections_dict
 
 def save_to_json(data, json_filepath):
     """Saves the dictionary to a JSON file."""
@@ -288,12 +460,80 @@ def save_to_json(data, json_filepath):
     except Exception as e:
         logging.error(f"Error saving data to JSON: {e}") 
 
-# Removed helper function as it's not used currently
-# def identifier_from_key(key_string):
-#      parts = key_string.split(' ', 1)
-#      if len(parts) > 1:
-#           return parts[1]
-#      return ""
+# --- Helper Function for Consolidation ---
+def get_structure_level(structure_type):
+    """Returns a numerical level for hierarchical sorting/stack management."""
+    level_map = {
+        'Chapter': 1,
+        'Part': 2,
+        'Division': 3,
+        'Subdivision': 4,
+        'Section': 5, # Sections are the base level
+        'Guide': 0 # Guides are handled before consolidation
+    }
+    return level_map.get(structure_type, 99) # Return high number for unknowns
+
+# --- New Consolidation Function ---
+def consolidate_to_sections(sections_dict, ordered_keys):
+    """
+    Consolidates hierarchical structures (Chapter, Part, Division, Subdivision)
+    by prepending their HTML content to the Sections that fall under them.
+    Assumes Guide and Table of Sections processing has already occurred.
+    Returns a new dictionary containing only Section entries.
+    """
+    logging.info("Starting consolidation into Sections...")
+    final_sections = {}
+    parent_html_stack = [] # Stores tuples of (level, html_string)
+    
+    for key in ordered_keys:
+        if key not in sections_dict: # Skip keys removed by guide processing
+            continue
+            
+        section = sections_dict[key]
+        structure_type = section.get('structure_type')
+        current_level = get_structure_level(structure_type)
+        current_html = section.get('html', '')
+
+        logging.debug(f"  Processing key '{key}', type: {structure_type}, level: {current_level}")
+
+        # Pop headers from stack that are at the same or lower level
+        while parent_html_stack and parent_html_stack[-1][0] >= current_level:
+            popped_level, _ = parent_html_stack.pop()
+            logging.debug(f"    Popped level {popped_level} from stack.")
+            
+        # If it's a structural header (not Section), push it onto the stack
+        if 1 <= current_level <= 4: # Chapter, Part, Division, Subdivision
+            logging.debug(f"    Pushing level {current_level} onto stack.")
+            parent_html_stack.append((current_level, current_html))
+        
+        # If it's a Section, consolidate and add to final output
+        elif current_level == 5: # Section
+            logging.debug(f"    Consolidating parent HTML for Section '{key}'")
+            parent_html_content = "\n".join([html for _, html in parent_html_stack])
+            
+            # Combine parent HTML with section HTML
+            combined_html = parent_html_content + "\n" + current_html if parent_html_content else current_html
+            
+            # Create the new consolidated section entry
+            final_sections[key] = {
+                # Copy essential fields from original section
+                'structure_type': structure_type,
+                'heading_text': section.get('heading_text', ''),
+                'full_id': section.get('full_id'),
+                'primary_id': section.get('primary_id'),
+                'secondary_id': section.get('secondary_id'),
+                # Add the consolidated HTML and recalculated text/count
+                'html': combined_html,
+                'text_for_embedding': clean_html_for_embedding(combined_html),
+                'char_count': len(clean_html_for_embedding(combined_html))
+                # Note: We lose guide_target_type here, might need adjustment if needed
+            }
+            logging.debug(f"    Added consolidated section '{key}' to final output.")
+        else:
+            logging.warning(f"  Skipping key '{key}' with unknown or unhandled structure type '{structure_type}' during consolidation.")
+            
+    logging.info(f"Finished consolidation. Final dictionary contains {len(final_sections)} Section entries.")
+    return final_sections
 
 if __name__ == "__main__":
     # --- Configure Logging --- 
@@ -347,16 +587,22 @@ if __name__ == "__main__":
     logging.info("Starting HTML section extraction...")
     sections, ordered_keys = extract_html_sections(html_to_parse) # Get both dict and ordered keys
 
-    # Perform Post-Processing Step
+    # Perform Post-Processing Steps
+    processed_sections = sections # Start with the initially parsed sections
     if sections and ordered_keys: # Ensure we have data to process
-        sections = post_process_table_of_sections(sections, ordered_keys)
+        # Process Tables of Sections first
+        processed_sections = post_process_table_of_sections(processed_sections, ordered_keys)
+        # Then process Guides, operating on the result of the previous step
+        processed_sections = post_process_guides(processed_sections, ordered_keys)
+        # Finally, consolidate everything into Section entries
+        processed_sections = consolidate_to_sections(processed_sections, ordered_keys)
     else:
         logging.warning("Skipping post-processing as no sections or ordered keys were generated.")
 
-    # Save the results to the specified output JSON path
-    if sections is not None: 
-      logging.info(f"Saving potentially modified sections to: {output_json_path}") 
-      save_to_json(sections, output_json_path)
+    # Save the final consolidated results to the specified output JSON path
+    if processed_sections is not None: 
+      logging.info(f"Saving final consolidated sections to: {output_json_path}") 
+      save_to_json(processed_sections, output_json_path)
     else:
       # This case might be less likely now, but kept for safety
       logging.error(f"Error during HTML processing or post-processing. Saving empty/original JSON to '{output_json_path}'.") 
