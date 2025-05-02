@@ -91,12 +91,9 @@ def extract_html_sections(html_content):
     }
     # --- End Patterns ---
 
-    # --- Enhanced Logic Flags ---
-    # We assume the main content starts after the first heading with an anchor ID is found.
-    has_started_main_content = False 
-
     # --- Main Loop ---
     for tag_index, tag in enumerate(content_tags):
+        # --- Process current tag ---
         if not hasattr(tag, 'name'):
             continue
 
@@ -110,11 +107,22 @@ def extract_html_sections(html_content):
         logging.debug(f"  Raw Text: '{text}'")
         logging.debug(f"  Normalized Text: '{normalized_text}'")
 
+        # --- Explicitly ignore known non-section headers --- 
+        ignore_texts = ["operative provisions", "table of sections"]
+        is_ignored_header = normalized_text.lower() in ignore_texts
+        if is_ignored_header:
+            logging.debug(f"  Ignoring known non-structural header: '{normalized_text}'")
+            # Append to current section if active, otherwise skip
+            if current_key and found_first_section:
+                logging.debug(f"    Appending ignored header tag to section '{current_key}'")
+                current_html_snippet_tags.append(tag)
+            continue # Skip further processing for this tag
+
         # --- Check Patterns --- 
         matched_level = None
         match_obj = None # Reset for each tag
         heading_text = ""
-        if normalized_text: # Only check non-empty text
+        if normalized_text: 
             logging.debug("  Checking patterns against NORMALIZED text...")
             for level, pattern in patterns.items():
                 current_match = pattern.match(normalized_text)
@@ -122,10 +130,9 @@ def extract_html_sections(html_content):
                 logging.debug(f"    Pattern '{level}': {match_result}")
                 if current_match:
                     matched_level = level
-                    match_obj = current_match # Store the successful match object
+                    match_obj = current_match 
                     logging.debug(f"  >>> Matched as '{matched_level}'")
                     try:
-                        # Extract heading text based on group index
                         group_index = 3 if level == 'Guide' else 2
                         extracted_heading = match_obj.group(group_index).strip() if match_obj.group(group_index) else ""
                         heading_text = re.sub(r'\s+', ' ', extracted_heading).strip()
@@ -133,115 +140,119 @@ def extract_html_sections(html_content):
                     except IndexError:
                         heading_text = ""
                         logging.warning(f"    Could not extract heading group {group_index} for level '{level}'.")
-                    break # Stop checking patterns on first match
+                    break 
 
-        # --- Process based on whether a pattern matched --- 
-        if matched_level is not None and match_obj is not None: # Check both for safety
-            # A pattern was matched for this tag
-
-            # --- Finalize Previous Section (if any) --- 
-            if current_key and current_html_snippet_tags:
-                html_string = "\n".join(str(t) for t in current_html_snippet_tags)
-                text_for_embedding = clean_html_for_embedding(html_string)
-                if current_key in sections_dict:
-                    sections_dict[current_key]["html"] = html_string
-                    sections_dict[current_key]["char_count"] = len(text_for_embedding)
-                    sections_dict[current_key]["text_for_embedding"] = text_for_embedding
-                    logging.debug(f"  Finalized content for previous section '{current_key}'. Char count: {len(text_for_embedding)}")
-                else:
-                    logging.warning(f"Attempted to finalize section '{current_key}' but key not found in dictionary.")
-            elif current_key:
-                 logging.debug(f"  Previous section '{current_key}' had no accumulated content tags.")
-            
-            # Reset snippet accumulator (will be repopulated below if definitive heading)
-            current_html_snippet_tags = [] 
-
-            # --- Extract Identifier and Key from the successful match_obj --- 
-            raw_identifier = None
-            new_key = None
-            guide_type = None # Initialize guide_type
-            try:
-                id_group_index = 2 if matched_level == 'Guide' else 1 
-                raw_identifier = match_obj.group(id_group_index)
-            except IndexError:
-                 logging.error(f"  Regex error: Could not extract ID group {id_group_index} for level '{matched_level}' from text: {normalized_text}")
-                 raw_identifier = None
-            
-            if raw_identifier:
-                if matched_level == 'Guide':
-                    try:
-                       guide_type = match_obj.group(1) # Get the type (Division, Part etc.)
-                       raw_key_str = f"Guide to {guide_type} {raw_identifier}"
-                       new_key = normalize_hyphens(raw_key_str)
-                    except IndexError:
-                        logging.error(f"Could not extract guide type (group 1) for Guide match: {normalized_text}")
-                        new_key = None # Failed to form key
-                else:
-                    new_key = normalize_hyphens(f"{matched_level}-{raw_identifier}")
-            else:
-                logging.warning(f"Could not extract identifier for matched level '{matched_level}' in text: {normalized_text[:100]}...")
-                new_key = None # Ensure new_key is None
-
-            # --- Check if Definitive Heading & Update State --- 
+        # --- Process based on match result --- 
+        if matched_level is not None and match_obj is not None: # Pattern Matched!
             is_definitive_heading = tag.find('a', id=True) is not None
-            if is_definitive_heading:
-                logging.debug(f"  Tag is a definitive heading (contains <a id=...>)")
-                if new_key:
-                     # Prepare section info dictionary
-                     section_info = {
-                         "structure_type": matched_level,
-                         "heading_text": heading_text 
-                     }
-                     # Add extracted IDs
-                     normalized_identifier = normalize_hyphens(raw_identifier)
-                     section_info["full_id"] = normalized_identifier
-                     id_parts = normalized_identifier.split(standard_hyphen)
-                     if len(id_parts) > 0:
-                         section_info["primary_id"] = id_parts[0]
-                     if len(id_parts) > 1:
-                         section_info["secondary_id"] = id_parts[1]
-                     if matched_level == 'Guide' and guide_type:
-                         section_info["guide_target_type"] = guide_type
 
-                     logging.debug(f"  >>> Starting new definitive section: Key='{new_key}', Info={section_info}")
-                     if new_key in sections_dict:
-                         logging.warning(f"Duplicate unique key detected (definitive heading): '{new_key}'. Overwriting previous entry.")
-                     sections_dict[new_key] = section_info
-                     if new_key not in ordered_keys:
-                          ordered_keys.append(new_key)
-                     current_key = new_key # Set the new active section
-                     current_html_snippet_tags = [tag] # Start this section's content with the heading tag
-                     found_first_section = True
+            if is_definitive_heading:
+                # --- Finalize PREVIOUS Section --- 
+                if current_key and current_html_snippet_tags:
+                    html_string = "\n".join(str(t) for t in current_html_snippet_tags)
+                    text_for_embedding = clean_html_for_embedding(html_string)
+                    if current_key in sections_dict:
+                        sections_dict[current_key]["html"] = html_string
+                        sections_dict[current_key]["char_count"] = len(text_for_embedding)
+                        sections_dict[current_key]["text_for_embedding"] = text_for_embedding
+                        logging.debug(f"  Finalized content for previous section '{current_key}'. Char count: {len(text_for_embedding)}")
+                    else:
+                        # This case shouldn't happen if logic is correct, but warns if it does.
+                        logging.warning(f"Attempted to finalize section '{current_key}' but key not found.")
+                elif current_key:
+                     # Previous section existed but had no content tags (only the heading)
+                     logging.debug(f"  Previous section '{current_key}' had no content tags to finalize.")
+
+                # --- Start NEW Definitive Section --- 
+                logging.debug(f"  Tag is a definitive heading (contains <a id=...>)")
+                # Extract ID/Key 
+                raw_identifier = None
+                new_key = None
+                guide_type = None
+                try:
+                    id_group_index = 2 if matched_level == 'Guide' else 1
+                    raw_identifier = match_obj.group(id_group_index)
+                except IndexError:
+                    logging.error(f"Regex error: Could not extract ID group {id_group_index} for level '{matched_level}' from text: {normalized_text}")
+                    raw_identifier = None
+                
+                if raw_identifier:
+                    if matched_level == 'Guide':
+                       try: 
+                           guide_type = match_obj.group(1)
+                           raw_key_str = f"Guide to {guide_type} {raw_identifier}"
+                           new_key = normalize_hyphens(raw_key_str)
+                       except IndexError:
+                           logging.error(f"Could not extract guide type (group 1) for Guide match: {normalized_text}")
+                           new_key = None
+                    else:
+                        new_key = normalize_hyphens(f"{matched_level}-{raw_identifier}")
                 else:
-                     logging.error(f"Definitive heading found but failed to generate a valid key for text: {normalized_text}")
-            else:
-                # Matched a pattern but was not a definitive heading (e.g., ToC entry)
-                logging.debug(f"  Matched '{matched_level}' but tag lacks <a id=...>. Ignoring as section start.")
-                # Do not update current_key, sections_dict, or ordered_keys
+                    logging.warning(f"Could not extract identifier for matched level '{matched_level}' in text: {normalized_text[:100]}...")
+                    new_key = None
+
+                # Update State if Key is Valid
+                if new_key:
+                    section_info = {"structure_type": matched_level, "heading_text": heading_text}
+                    # Add IDs, guide_type etc.
+                    normalized_identifier = normalize_hyphens(raw_identifier)
+                    section_info["full_id"] = normalized_identifier
+                    id_parts = normalized_identifier.split(standard_hyphen)
+                    if len(id_parts) > 0: section_info["primary_id"] = id_parts[0]
+                    if len(id_parts) > 1: section_info["secondary_id"] = id_parts[1]
+                    if matched_level == 'Guide' and guide_type: section_info["guide_target_type"] = guide_type
+
+                    logging.debug(f"  >>> Starting new definitive section: Key='{new_key}', Info={section_info}")
+                    if new_key in sections_dict:
+                        logging.warning(f"Duplicate key (definitive heading): '{new_key}'. Overwriting.")
+                    sections_dict[new_key] = section_info # Set metadata
+                    # Add key to ordered list if it's the first time we see this definitive key
+                    if new_key not in ordered_keys:
+                        ordered_keys.append(new_key)
+                    current_key = new_key # Update active section key
+                    current_html_snippet_tags = [tag] # Start new snippet list with heading tag
+                    found_first_section = True
+                else: # Failed to get key for a definitive heading
+                    logging.error(f"Definitive heading found, but failed to generate key: {normalized_text}")
+                    # If key generation fails for a definitive heading, we stop tracking a current section 
+                    # to prevent appending subsequent content incorrectly.
+            
+            else: # Matched a pattern but NOT definitive heading (e.g. ToC entry)
+                logging.debug(f"  Matched '{matched_level}' but not definitive. Appending to current section '{current_key}'.")
+                if current_key and found_first_section:
+                     current_html_snippet_tags.append(tag)
         
-        else: # --- Handle Tags NOT Matching Any Pattern --- 
-            # Only append if a definitive section has been started
+        else: # --- Tag did NOT Match Any Pattern (Regular Content) --- 
             if current_key and found_first_section:
                  logging.debug(f"  Appending non-matching tag to section '{current_key}'")
                  current_html_snippet_tags.append(tag)
             else:
+                 # Content before the first definitive heading is ignored
                  logging.debug(f"  Tag did not match and no current section active. Skipping.")
 
-    # Finalize the last section
+    # --- Final Save for the VERY Last Section --- 
+    # After the loop, finalize the content accumulated for the last active section
     if current_key and current_html_snippet_tags:
-        logging.debug(f"\nFinalizing last section: Key='{current_key}'")
         html_string = "\n".join(str(t) for t in current_html_snippet_tags)
         text_for_embedding = clean_html_for_embedding(html_string)
         if current_key in sections_dict:
-            sections_dict[current_key]["html"] = html_string
-            sections_dict[current_key]["char_count"] = len(text_for_embedding)
-            sections_dict[current_key]["text_for_embedding"] = text_for_embedding
+            # Only update if the content fields haven't already been set (e.g., by the loop itself)
+            # This check might be redundant if the logic is correct, but safer.
+            if sections_dict[current_key].get("html") is None: 
+                sections_dict[current_key]["html"] = html_string
+                sections_dict[current_key]["char_count"] = len(text_for_embedding)
+                sections_dict[current_key]["text_for_embedding"] = text_for_embedding
+                logging.debug(f"  Finalized content for VERY LAST section '{current_key}'. Char count: {len(text_for_embedding)}")
+            else:
+                 logging.debug(f" Content for last section '{current_key}' was already finalized during loop.")
         else:
-             logging.warning(f"Attempted to finalize last section '{current_key}' which was not properly initialized.")
+            logging.warning(f"Attempted to finalize VERY LAST section '{current_key}' but key not found.")
+    elif current_key:
+        logging.debug(f"  VERY LAST section '{current_key}' ended with no content tags.")
 
-    logging.info(f"Identified {len(sections_dict)} definitive sections/markers.") 
-    # Return both the dictionary and the ordered list of keys
-    return sections_dict, ordered_keys 
+    # Return the dictionary containing section metadata and accumulated content
+    print(f"Identified {len(sections_dict)} definitive sections/markers.")
+    return sections_dict, ordered_keys
 
 # --- Table of Sections Processing Function ---
 def post_process_table_of_sections(sections_dict, ordered_keys):

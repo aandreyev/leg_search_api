@@ -46,15 +46,18 @@ def load_app_config():
 @st.cache_resource # Cache the model loading
 def get_embedding_model(model_name):
     """Loads and returns the SentenceTransformer model."""
-    st.info(f"Loading embedding model: {model_name}...") # Show status in UI
+    # Use sidebar for status messages
+    st.sidebar.info(f"Loading embedding model: {model_name}...")
     try:
         model = SentenceTransformer(model_name)
         dimension = model.get_sentence_embedding_dimension()
-        st.success(f"Model '{model_name}' loaded (Dimension: {dimension}).")
+        # Show success in sidebar
+        st.sidebar.success(f"Model '{model_name}' loaded (Dim: {dimension}).")
         print(f"Model '{model_name}' loaded (Dimension: {dimension}).") # Server log
         return model
     except Exception as e:
-        st.error(f"Error loading SentenceTransformer model '{model_name}': {e}")
+        # Show error in sidebar
+        st.sidebar.error(f"Model loading error: {e}")
         print(f"Error loading SentenceTransformer model '{model_name}': {e}") # Server log
         st.stop() # Stop if model fails to load
 
@@ -65,9 +68,12 @@ def init_supabase_client(url, key):
     try:
         client = create_client(url, key)
         print("Supabase client initialized.") # Server log
+        # Optional: add success message to sidebar if desired
+        # st.sidebar.success("Connected to Database.")
         return client
     except Exception as e:
-        st.error(f"Error initializing Supabase client: {e}")
+        # Show error in sidebar
+        st.sidebar.error(f"Supabase client error: {e}")
         print(f"Error initializing Supabase client: {e}") # Server log
         st.stop()
 
