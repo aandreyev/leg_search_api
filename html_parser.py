@@ -50,7 +50,22 @@ def extract_html_sections(html_content):
 
     soup = BeautifulSoup(html_content, 'html.parser')
     sections_dict = {}
-    ordered_keys = [] # List to store keys in order of appearance
+    ordered_keys = [] # Keep track of the order sections are definitively identified
+
+    # --- Define content tags to iterate over --- 
+    content_tags = soup.body.find_all(recursive=False) if soup.body else []
+    if not content_tags: # Fallback if no body tag or body has no direct children
+        content_tags = list(soup.children)
+        # Further filter to remove things like NavigableString at the top level if needed
+        content_tags = [tag for tag in content_tags if hasattr(tag, 'name')]
+        logging.debug("Using soup.children as content_tags.")
+    else:
+        logging.debug("Using soup.body children as content_tags.")
+
+    # --- State Variables --- 
+    current_key = None                # Tracks the key of the section being built
+    current_html_snippet_tags = []  # Accumulates tags for the current section
+    found_first_section = False     # Flag to start accumulating content only after first heading
 
     # Define specific separators
     whitespace_separator = r"[\s\u00A0]+" # Match standard whitespace AND non-breaking space (U+00A0)
@@ -68,7 +83,7 @@ def extract_html_sections(html_content):
         'Chapter':     re.compile(r"^\s*Chapter[\s\u00A0]+(\d{1,3}[A-Z]?)(?:[^\w\s]|\s)*(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         'Part':        re.compile(r"^\s*Part[\s\u00A0]+(\d{1,3}[A-Z]?-\d{1,3}[A-Z]?)(?:[^\w\s]|\s)*(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         'Division':    re.compile(r"^\s*Division[\s\u00A0]+(\d{1,3}[A-Z]?)(?:[^\w\s]|\s)*(.*?)(?:\s+\d+)?$", re.IGNORECASE),
-        'Subdivision': re.compile(r"^\s*Subdivision[\s\u00A0]+(\d{1,3}[A-Z]?-[A-Z])(?:[^\w\s]|\s)*(.*?)(?:\s+\d+)?$", re.IGNORECASE),
+        'Subdivision': re.compile(r"^\s*Subdivision[\s\u00A0]+(\d{1,3}[A-Z]?-[A-Z]+)(?:[^\w\s]|\s)*(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         # Guide pattern uses whitespace separator explicitly before heading
         'Guide':       re.compile(r"^\s*Guide to (Division|Subdivision|Part|Chapter)[\s\u00A0]+(\d{1,3}[A-Z]?(?:-\d{1,3}[A-Z]?|-[A-Z])?)[\s\u00A0]+(.*?)(?:\s+\d+)?$", re.IGNORECASE),
         # Section pattern adjusted
@@ -76,93 +91,55 @@ def extract_html_sections(html_content):
     }
     # --- End Patterns ---
 
-    current_key = None
-    current_html_snippet_tags = []
-    found_first_section = False
-    in_table_of_sections = False # State flag
+    # --- Enhanced Logic Flags ---
+    # We assume the main content starts after the first heading with an anchor ID is found.
+    has_started_main_content = False 
 
-    content_tags = soup.body.find_all(recursive=False) if soup.body else []
-    if not content_tags:
-        content_tags = list(soup.children)
-
-    for tag in content_tags:
+    # --- Main Loop ---
+    for tag_index, tag in enumerate(content_tags):
         if not hasattr(tag, 'name'):
             continue
 
-        logging.debug(f"\nProcessing Tag: {str(tag)[:200]}...")
-
+        # --- Get Text and Normalize --- 
         try:
-            raw_text = tag.get_text(" ", strip=True)
-            # --- Normalize text FIRST --- 
-            text = normalize_hyphens(raw_text)
-            logging.debug(f"  Raw Text: '{raw_text}'")
-            logging.debug(f"  Normalized Text: '{text}'")
+            text = tag.get_text(" ", strip=True)
         except AttributeError:
             text = ""
-            raw_text = ""
+        normalized_text = normalize_hyphens(text)
+        logging.debug(f"\nProcessing Tag: {str(tag)[:150]}...")
+        logging.debug(f"  Raw Text: '{text}'")
+        logging.debug(f"  Normalized Text: '{normalized_text}'")
 
-        # --- State Handling for Table of Sections ---
-        is_definitive_heading = False
-        if hasattr(tag, 'find') and tag.find('a', id=re.compile(r'^_Toc')):
-             is_definitive_heading = True
-             logging.debug("  Tag contains a TOC anchor, likely a definitive heading.")
-
-        if in_table_of_sections:
-            # If we are in a table, check if this tag marks the end of it
-            if is_definitive_heading or any(p.match(text) for p_name, p in patterns.items() if p_name != 'Section'): # Check higher-level patterns too
-                logging.debug("  >>> Exiting table of sections mode.")
-                in_table_of_sections = False
-                # Fall through to normal processing for this tag
-            else:
-                # Still in table, just append the tag to the current section
-                if current_key and found_first_section:
-                     logging.debug(f"  [In Table Mode] Appending tag to section '{current_key}'")
-                     current_html_snippet_tags.append(tag)
-                     continue # Skip normal pattern matching for this tag
-                else:
-                     logging.warning("[In Table Mode] Found table line but no current section active. Skipping.")
-                     continue
-
-        # Check if this tag *starts* a table of sections (only if not already in one)
-        if not in_table_of_sections and tag.name == 'p' and text.lower() == 'table of sections':
-            logging.debug("  >>> Entering table of sections mode.")
-            in_table_of_sections = True
-            # Append this header tag to the current section and continue
-            if current_key and found_first_section:
-                logging.debug(f"  Appending 'Table of sections' header to section '{current_key}'")
-                current_html_snippet_tags.append(tag)
-                continue
-            else:
-                logging.warning("Found 'Table of sections' header but no current section active. Skipping.")
-                continue
-        # --- End State Handling ---
-
-        # --- Normal Pattern Matching --- 
+        # --- Check Patterns --- 
         matched_level = None
-        match_obj = None
+        match_obj = None # Reset for each tag
         heading_text = ""
-        if text:
+        if normalized_text: # Only check non-empty text
             logging.debug("  Checking patterns against NORMALIZED text...")
             for level, pattern in patterns.items():
-                match_obj = pattern.match(text)
-                match_result = "MATCH" if match_obj else "NO MATCH"
+                current_match = pattern.match(normalized_text)
+                match_result = "MATCH" if current_match else "NO MATCH"
                 logging.debug(f"    Pattern '{level}': {match_result}")
-                if match_obj:
-                    # Check if it's a weak 'Section' match that should be ignored
-                    # (Could add more sophisticated checks here if needed)
-                    # For now, if it matched, we assume it's a real heading *unless* in_table_of_sections was true (handled above)
+                if current_match:
                     matched_level = level
+                    match_obj = current_match # Store the successful match object
                     logging.debug(f"  >>> Matched as '{matched_level}'")
                     try:
+                        # Extract heading text based on group index
                         group_index = 3 if level == 'Guide' else 2
-                        heading_text = match_obj.group(group_index).strip() if match_obj.group(group_index) else ""
-                        heading_text = re.sub(r'\s+', ' ', heading_text).strip()
+                        extracted_heading = match_obj.group(group_index).strip() if match_obj.group(group_index) else ""
+                        heading_text = re.sub(r'\s+', ' ', extracted_heading).strip()
+                        logging.debug(f"    Extracted heading: '{heading_text}'")
                     except IndexError:
                         heading_text = ""
-                    break
+                        logging.warning(f"    Could not extract heading group {group_index} for level '{level}'.")
+                    break # Stop checking patterns on first match
 
-        if matched_level:
-            # Finalize the previous section (if any)
+        # --- Process based on whether a pattern matched --- 
+        if matched_level is not None and match_obj is not None: # Check both for safety
+            # A pattern was matched for this tag
+
+            # --- Finalize Previous Section (if any) --- 
             if current_key and current_html_snippet_tags:
                 html_string = "\n".join(str(t) for t in current_html_snippet_tags)
                 text_for_embedding = clean_html_for_embedding(html_string)
@@ -170,58 +147,85 @@ def extract_html_sections(html_content):
                     sections_dict[current_key]["html"] = html_string
                     sections_dict[current_key]["char_count"] = len(text_for_embedding)
                     sections_dict[current_key]["text_for_embedding"] = text_for_embedding
+                    logging.debug(f"  Finalized content for previous section '{current_key}'. Char count: {len(text_for_embedding)}")
                 else:
-                    logging.warning(f"Attempted to finalize section '{current_key}' which was not properly initialized.")
+                    logging.warning(f"Attempted to finalize section '{current_key}' but key not found in dictionary.")
+            elif current_key:
+                 logging.debug(f"  Previous section '{current_key}' had no accumulated content tags.")
+            
+            # Reset snippet accumulator (will be repopulated below if definitive heading)
+            current_html_snippet_tags = [] 
 
-            # Start the new section
-            identifier = None
+            # --- Extract Identifier and Key from the successful match_obj --- 
+            raw_identifier = None
             new_key = None
-            section_info = {
-                "structure_type": matched_level,
-                "heading_text": heading_text
-            }
-            id_group_index = 2 if level == 'Guide' else 1
-            identifier = match_obj.group(id_group_index)
-
-            if matched_level == 'Guide':
-                guide_type = match_obj.group(1)
-                new_key = f"Guide to {guide_type}-{identifier}" 
-                section_info["guide_target_type"] = guide_type
-            else: # Chapter, Part, Division, Subdivision, Section
-                new_key = f"{matched_level}-{identifier}"
-
-            if identifier:
-                section_info["full_id"] = identifier 
-
-                id_parts = identifier.split(standard_hyphen)
-                if len(id_parts) > 0:
-                    section_info["primary_id"] = id_parts[0]
-                if len(id_parts) > 1:
-                    section_info["secondary_id"] = id_parts[1]
-
-            current_key = new_key
-            if current_key:
-                logging.debug(f"  >>> Starting new section: Key='{current_key}', Info={section_info}")
-                if current_key in sections_dict:
-                     logging.warning(f"Duplicate unique key detected: '{current_key}'. Overwriting previous entry.")
-                sections_dict[current_key] = section_info
-                ordered_keys.append(current_key)
-                current_html_snippet_tags = [tag] # Start HTML with the matched tag
-                found_first_section = True
+            guide_type = None # Initialize guide_type
+            try:
+                id_group_index = 2 if matched_level == 'Guide' else 1 
+                raw_identifier = match_obj.group(id_group_index)
+            except IndexError:
+                 logging.error(f"  Regex error: Could not extract ID group {id_group_index} for level '{matched_level}' from text: {normalized_text}")
+                 raw_identifier = None
+            
+            if raw_identifier:
+                if matched_level == 'Guide':
+                    try:
+                       guide_type = match_obj.group(1) # Get the type (Division, Part etc.)
+                       raw_key_str = f"Guide to {guide_type} {raw_identifier}"
+                       new_key = normalize_hyphens(raw_key_str)
+                    except IndexError:
+                        logging.error(f"Could not extract guide type (group 1) for Guide match: {normalized_text}")
+                        new_key = None # Failed to form key
+                else:
+                    new_key = normalize_hyphens(f"{matched_level}-{raw_identifier}")
             else:
-                logging.debug(f"  >>> WARNING: Could not determine key for matched text.")
-                logging.warning(f"Could not determine key for matched text: {text[:100]}...") 
+                logging.warning(f"Could not extract identifier for matched level '{matched_level}' in text: {normalized_text[:100]}...")
+                new_key = None # Ensure new_key is None
 
-        elif current_key and found_first_section:
-             # This tag didn't match any pattern, append to current section
-             logging.debug(f"  Appending non-matching tag to section '{current_key}'")
-             if current_key in sections_dict: # Check necessary?
+            # --- Check if Definitive Heading & Update State --- 
+            is_definitive_heading = tag.find('a', id=True) is not None
+            if is_definitive_heading:
+                logging.debug(f"  Tag is a definitive heading (contains <a id=...>)")
+                if new_key:
+                     # Prepare section info dictionary
+                     section_info = {
+                         "structure_type": matched_level,
+                         "heading_text": heading_text 
+                     }
+                     # Add extracted IDs
+                     normalized_identifier = normalize_hyphens(raw_identifier)
+                     section_info["full_id"] = normalized_identifier
+                     id_parts = normalized_identifier.split(standard_hyphen)
+                     if len(id_parts) > 0:
+                         section_info["primary_id"] = id_parts[0]
+                     if len(id_parts) > 1:
+                         section_info["secondary_id"] = id_parts[1]
+                     if matched_level == 'Guide' and guide_type:
+                         section_info["guide_target_type"] = guide_type
+
+                     logging.debug(f"  >>> Starting new definitive section: Key='{new_key}', Info={section_info}")
+                     if new_key in sections_dict:
+                         logging.warning(f"Duplicate unique key detected (definitive heading): '{new_key}'. Overwriting previous entry.")
+                     sections_dict[new_key] = section_info
+                     if new_key not in ordered_keys:
+                          ordered_keys.append(new_key)
+                     current_key = new_key # Set the new active section
+                     current_html_snippet_tags = [tag] # Start this section's content with the heading tag
+                     found_first_section = True
+                else:
+                     logging.error(f"Definitive heading found but failed to generate a valid key for text: {normalized_text}")
+            else:
+                # Matched a pattern but was not a definitive heading (e.g., ToC entry)
+                logging.debug(f"  Matched '{matched_level}' but tag lacks <a id=...>. Ignoring as section start.")
+                # Do not update current_key, sections_dict, or ordered_keys
+        
+        else: # --- Handle Tags NOT Matching Any Pattern --- 
+            # Only append if a definitive section has been started
+            if current_key and found_first_section:
+                 logging.debug(f"  Appending non-matching tag to section '{current_key}'")
                  current_html_snippet_tags.append(tag)
-             else:
-                  logging.warning(f"Attempted to append tag to uninitialized section '{current_key}'. Tag: {str(tag)[:100]}")
-        else:
-             # Before the first section or error
-             logging.debug(f"  Tag did not match and no current section active. Skipping.")
+            else:
+                 logging.debug(f"  Tag did not match and no current section active. Skipping.")
 
     # Finalize the last section
     if current_key and current_html_snippet_tags:
@@ -235,7 +239,7 @@ def extract_html_sections(html_content):
         else:
              logging.warning(f"Attempted to finalize last section '{current_key}' which was not properly initialized.")
 
-    logging.info(f"Identified {len(sections_dict)} sections/markers.") 
+    logging.info(f"Identified {len(sections_dict)} definitive sections/markers.") 
     # Return both the dictionary and the ordered list of keys
     return sections_dict, ordered_keys 
 
