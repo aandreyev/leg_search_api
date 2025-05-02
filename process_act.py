@@ -349,9 +349,75 @@ def process_single_file(docx_path, act_name, compilation_date, save_intermediate
              except OSError as rm_err: print(f"  Warning: Could not remove potentially incomplete file {converted_json_path}: {rm_err}", file=sys.stderr)
         return False # Indicate failure
 
-    # --- Step 4: Create Embeddings --- 
+    # --- Step 3.5: Apply HTML Styling --- 
     # Input is the .converted.json from Step 3
     current_step_input = converted_json_path # Rename for clarity
+    print(f"  Step 3.5: Apply HTML Styling (using {os.path.basename(current_step_input)})")
+    styled_json_path = os.path.join(output_dir, f"{file_basename}.styled.json")
+
+    try:
+        script_path = os.path.join(os.path.dirname(__file__), "style_html_content.py")
+        if not os.path.exists(script_path):
+             script_path = "style_html_content.py" # Try current dir
+             if not os.path.exists(script_path):
+                 print(f"  Error: Cannot find the 'style_html_content.py' script.", file=sys.stderr)
+                 # Cleanup previous intermediate if needed
+                 if not save_intermediates and os.path.exists(current_step_input):
+                     try: os.remove(current_step_input)
+                     except OSError as rm_err: print(f"  Warning: Could not remove intermediate file {current_step_input}: {rm_err}", file=sys.stderr)
+                 return False # Indicate failure
+
+        cmd = [sys.executable, script_path, current_step_input, styled_json_path]
+        print(f"    Running command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+        print(f"    Successfully generated styled JSON: {styled_json_path}")
+        # print(f"    STDOUT:\n{result.stdout}") # Uncomment for debugging stdout
+        # print(f"    STDERR:\n{result.stderr}") # Uncomment for debugging stderr
+
+        # Cleanup previous intermediate file if requested
+        if not save_intermediates and os.path.exists(current_step_input):
+             try:
+                 os.remove(current_step_input)
+                 print(f"    Removed intermediate file: {current_step_input}")
+             except OSError as e:
+                 print(f"  Warning: Could not remove intermediate file {current_step_input}: {e}", file=sys.stderr)
+
+        current_step_output = styled_json_path # Update for the next step (Embeddings)
+
+    except FileNotFoundError:
+         print(f"  Error: Python interpreter '{sys.executable}' not found?", file=sys.stderr)
+         return False
+    except subprocess.CalledProcessError as e:
+        print(f"  Error running style_html_content.py for {os.path.basename(docx_path)}:", file=sys.stderr)
+        print(f"    Return Code: {e.returncode}", file=sys.stderr)
+        stderr_str = e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else e.stderr
+        stdout_str = e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else e.stdout
+        print(f"    Stderr: {stderr_str}", file=sys.stderr)
+        print(f"    Stdout: {stdout_str}", file=sys.stderr)
+        # Cleanup previous intermediate if needed
+        if not save_intermediates and os.path.exists(current_step_input):
+            try: os.remove(current_step_input)
+            except OSError as rm_err: print(f"  Warning: Could not remove intermediate file {current_step_input}: {rm_err}", file=sys.stderr)
+        # Also cleanup the potentially incomplete output of this step
+        if os.path.exists(styled_json_path):
+             try: os.remove(styled_json_path)
+             except OSError as rm_err: print(f"  Warning: Could not remove potentially incomplete file {styled_json_path}: {rm_err}", file=sys.stderr)
+        return False # Indicate failure
+    except Exception as e:
+        print(f"  An unexpected error occurred during Step 3.5 (Styling) for {os.path.basename(docx_path)}: {e}", file=sys.stderr)
+        # Cleanup previous intermediate if needed
+        if not save_intermediates and os.path.exists(current_step_input):
+             try: os.remove(current_step_input)
+             except OSError as rm_err: print(f"  Warning: Could not remove intermediate file {current_step_input}: {rm_err}", file=sys.stderr)
+        # Also cleanup the potentially incomplete output of this step
+        if os.path.exists(styled_json_path):
+             try: os.remove(styled_json_path)
+             except OSError as rm_err: print(f"  Warning: Could not remove potentially incomplete file {styled_json_path}: {rm_err}", file=sys.stderr)
+        return False # Indicate failure
+
+    # --- Step 4: Create Embeddings --- 
+    # Input is the .styled.json from Step 3.5
+    current_step_input = styled_json_path # Update input source
     print(f"  Step 4: Create Embeddings (using {os.path.basename(current_step_input)})")
     # This is the FINAL output file for this document
     final_json_path = os.path.join(output_dir, f"{file_basename}.json")
