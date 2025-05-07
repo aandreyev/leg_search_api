@@ -1,3 +1,28 @@
+# FastAPI and Server
+fastapi
+uvicorn[standard] # Includes performance extras
+
+# Core Logic Dependencies
+supabase
+sentence-transformers
+python-dotenv
+torch # Or your chosen backend (tensorflow, flax)
+
+# Data Handling / Utilities
+pydantic # For FastAPI models
+numpy # Often used by sentence-transformers/torch
+
+# Original File Processing Dependencies
+python-docx
+mammoth
+beautifulsoup4
+lxml
+requests
+Pillow
+
+# --- Existing Dependencies (Kept from previous list) ---
+# Note: Some might be transitive dependencies and could potentially be removed
+# if not directly used, but keeping them is safer for now.
 aiohappyeyeballs==2.6.1
 aiohttp==3.11.18
 aiosignal==1.3.2
@@ -6,7 +31,7 @@ annotated-types==0.7.0
 anyio==4.9.0
 async-timeout==5.0.1
 attrs==25.3.0
-beautifulsoup4==4.13.4
+# beautifulsoup4==4.13.4 # Already included above
 blinker==1.9.0
 cachetools==5.5.2
 certifi==2025.4.26
@@ -15,7 +40,7 @@ click==8.1.8
 cobble==0.1.4
 deprecation==2.1.0
 exceptiongroup==1.2.2
-fastapi==0.115.12
+# fastapi==0.115.12 # Already included above
 filelock==3.18.0
 frozenlist==1.6.0
 fsspec==2025.3.2
@@ -35,51 +60,51 @@ Jinja2==3.1.6
 joblib==1.4.2
 jsonschema==4.23.0
 jsonschema-specifications==2025.4.1
-lxml==5.4.0
-mammoth==1.6.0
+# lxml==5.4.0 # Already included above
+# mammoth==1.6.0 # Already included above
 MarkupSafe==3.0.2
 mpmath==1.3.0
 multidict==6.4.3
 narwhals==1.37.1
 networkx==3.4.2
-numpy==2.2.5
+# numpy==2.2.5 # Already included above
 packaging==24.2
 pandas==2.2.3
-pillow==10.4.0
+# Pillow==10.4.0 # Already included above
 pluggy==1.5.0
 postgrest==1.0.1
 propcache==0.3.1
 protobuf==6.30.2
 pyarrow==20.0.0
-pydantic==2.11.3
+# pydantic==2.11.3 # Already included above
 pydantic_core==2.33.1
 pydeck==0.9.1
 PyJWT==2.10.1
 pytest==8.3.5
 pytest-mock==3.14.0
 python-dateutil==2.9.0.post0
-python-docx==1.1.2
-python-dotenv==1.1.0
+# python-docx==1.1.2 # Already included above
+# python-dotenv==1.1.0 # Already included above
 pytz==2025.2
 PyYAML==6.0.2
 realtime==2.4.3
 referencing==0.36.2
 regex==2024.11.6
-requests==2.32.3
+# requests==2.32.3 # Already included above
 rpds-py==0.24.0
 safetensors==0.5.3
 scikit-learn==1.6.1
 scipy==1.15.2
-sentence-transformers==4.1.0
+# sentence-transformers==4.1.0 # Already included above
 six==1.17.0
 smmap==5.0.2
 sniffio==1.3.1
 soupsieve==2.7
 starlette==0.46.2
 storage3==0.11.3
-streamlit==1.45.0
+streamlit==1.45.0 # Keep for now, might remove later if fully migrating UI
 StrEnum==0.4.15
-supabase==2.15.1
+# supabase==2.15.1 # Already included above
 supafunc==0.9.4
 sympy==1.14.0
 tenacity==9.1.2
@@ -87,14 +112,14 @@ threadpoolctl==3.6.0
 tokenizers==0.21.1
 toml==0.10.2
 tomli==2.2.1
-torch==2.7.0
+# torch==2.7.0 # Already included above
 tornado==6.4.2
 tqdm==4.67.1
-transformers==4.51.3
+transformers==4.51.3 # Dependency of sentence-transformers? Keep.
 typing-inspection==0.4.0
 typing_extensions==4.13.2
 tzdata==2025.2
 urllib3==2.4.0
-uvicorn==0.34.2
+# uvicorn==0.34.2 # Included above with [standard] extra
 websockets==14.2
 yarl==1.20.0
